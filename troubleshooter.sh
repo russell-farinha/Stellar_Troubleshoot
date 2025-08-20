@@ -27,6 +27,21 @@ SELECTED_TOOL_DESC=""
 SELECTED_TOOL_URL=""
 SEARCH_TERM=""
 
+# --- NEW: tiny-timeout feature detection (subsecond-safe) ---
+# Some shells (BusyBox/older) reject fractional -t values.
+# We detect support once and use an array var to pass args portably.
+supports_subsecond_read() {
+    { IFS= read -r -t 0.01 _ 2>/dev/null <<<""; } && return 0 || return 1
+}
+if supports_subsecond_read; then
+    # Fast path for modern bash: ~50ms lookahead for escape sequences
+    READ_TINY_TIMEOUT=(-t 0.05)
+else
+    # Portable fallback: integer seconds only
+    READ_TINY_TIMEOUT=(-t 1)
+fi
+# ------------------------------------------------------------
+
 # Draw menu with dynamic guide
 draw_menu() {
     clear
@@ -165,7 +180,8 @@ menu_loop() {
         read -rsn1 key
         case "$key" in
             $'\x1b')
-                if read -rsn2 -t 1 rest; then
+                # Use portable tiny-timeout for escape sequence lookahead
+                if read -rsn2 "${READ_TINY_TIMEOUT[@]}" rest; then
                     case "$rest" in
                         '[A') ((CURSOR--));;
                         '[B') ((CURSOR++));;
