@@ -1,6 +1,6 @@
 # Stellar Troubleshoot
 
-A **modular, menu-driven troubleshooting tool** for Stellar Cyber Photon sensors. This script allows users to easily navigate categories of tools, view descriptions, and run troubleshooting scripts directly on Photon-based Linux environments.
+A **modular, menu-driven troubleshooting tool** for Stellar Cyber Photon/Ubuntu sensors. This script lets support engineers navigate categories of tools defined in `tools.conf`, view descriptions, and run troubleshooting scripts directly on Linux systems.
 
 ---
 
@@ -11,118 +11,103 @@ A **modular, menu-driven troubleshooting tool** for Stellar Cyber Photon sensors
 - Two-step UI:
   1. **Categories view** – select a category
   2. **Tools view** – select a tool to view details and run it
-- Dynamic help guide at the bottom of the screen based on context
-- Tool description view with options to **run the tool** or return to the previous menu
-- Integrated search for tool names in tools mode
-- Fully compatible with **Photon Linux** and other Linux distributions
-- Automatic cleanup of downloaded scripts after exit
+- Tool detail view with options to **run the tool** or go back
+- Integrated search for **tool names** (in Tools mode)
+- Compatible with **Photon Linux** and **Ubuntu 22.x**
+- Automatic cleanup of downloaded scripts on exit
+- Portable key handling with **fractional timeout fallback** (works on BusyBox/older shells that require integer timeouts)
+
+> Note: This project targets **Linux**. A Windows/PowerShell sibling may be built later.
 
 ---
 
 ## Requirements
 
-- **Bash** (default on Photon Linux)
+- **Bash**
 - **curl** (for downloading scripts)
-- Ubuntu 22.x or Photon Linux environment
-- Network access to URLs defined in `tools.conf`
+- Photon Linux or Ubuntu 22.x
+- Network access to the URLs defined in `tools.conf`
 
 ---
 
 ## Installation
 
-1. Clone this repository:
+1. Clone the repository:
 
-```bash
-git clone https://github.com/yourusername/stellar-troubleshoot.git
-cd stellar-troubleshoot
-```
+   ```bash
+   git clone https://github.com/yourusername/stellar-troubleshoot.git
+   cd stellar-troubleshoot
+    ```
+
 2. Make the script executable:
 
-```bash
-chmod +x troubleshooter.sh
-```
+    ```bash
+    chmod +x troubleshooter.sh
+    ```
 
-3. Ensure `tools.conf` exists in the same directory and follows this format:
+3. Ensure `tools.conf` exists in the same directory and follows this format (example provided at the bottom):
 
-```
-# CATEGORY|NAME|DESCRIPTION|URL
-General Sensor Tools|Addition|Simple 'Addition' script that adds 2 integers|https://example.com/addition.sh
-Connectors|Subtraction|Simple 'Subtraction' script that subtracts 2 integers|https://example.com/subtraction.sh
-```
+    ```
+    # CATEGORY|NAME|DESCRIPTION|URL
+    ```
+
+---
 
 ## Usage
 
-Run the troubleshooter script:
-
+Run the troubleshooter:
+    
 ```bash
 ./troubleshooter.sh
 ```
+    
+---
 
 ## Navigation
 
-* `↑/↓` – Move up/down through menu options
+- `↑/↓` – Move up/down
 
-* `Enter` – Select highlighted option
+- `Enter` – Select highlighted option
 
-* `b` – Go back (only available in Tools and Tool Detail modes)
+- `b` – Back (available in Tools and Tool Detail modes)
 
-* `/` – Search tool names (only in Tools mode)
+- `/` – Search tool **names** (Tools mode)
 
-* `q` – Quit and clean up downloaded tools
+- `q` – Quit and clean up downloaded tools
+
+**Esc + Arrow keys** handling works smoothly on modern bash; on BusyBox/older shells that don’t support sub‑second timeouts, the script automatically falls back to integer timeouts.
+
+---
 
 ## Workflow
 
 1. **Select a category** – categories are dynamically loaded from `tools.conf`
 
-2. **Select a tool** – only the tool names are shown alphabetically
+2. **Select a tool** – tools are shown alphabetically
 
-3. **Tool detail view** – displays description and gives options:
+3. **Tool detail view** – shows the description and lets you:
 
-    * **Run tool** – executes the script
+    - **Run tool** – downloads and runs the script
 
-    * **Back to tools** – returns to tool list
+    - **Back to tools** – return to the tool list
 
-## Configuration (`tools.conf`)
+---
 
-* Format: `CATEGORY|NAME|DESCRIPTION|URL`
+## Configuration: `tools.conf`
 
-* Lines starting with `#` are ignored
+- Format: `CATEGORY|NAME|DESCRIPTION|URL`
 
-* Example:
+- Lines starting with `#` are ignored
+
+- Multi-word categories are supported
+
+- Update tools by editing this file (you can keep the same `troubleshooter.sh` on services and only ship an updated `tools.conf`)
+
+**Example:**
 
 ```
 # CATEGORY|NAME|DESCRIPTION|URL
-General Sensor Tools|Addition|Adds two numbers|https://example.com/addition.sh
-Connectors|Subtraction|Subtracts two numbers|https://example.com/subtraction.sh
-System Diagnostics|Firewall Check|Checks connectivity to IP:PORT|https://example.com/firewall_check.sh
+Mathematics|Addition|Simple 'Addition' script that adds 2 integers|GIST-URL
+Mathematics|Subtraction|Simple 'Subtraction' script that subtracts 2 integers|GIST-URL
+System Diagnostics|Firewall Check|Netcats required IPs and respective Ports and displays connectivity results|GIST-URL
 ```
-
-* Multi-word categories are fully supported
-
-* Tools can be added, removed, or updated by editing this file
-
-## Cleanup
-
-All downloaded scripts are stored temporarily in `./tools` and automatically deleted on quit.
-
-## Contributing
-
-1. Fork the repository
-
-2. Make your changes
-
-3. Update `tools.conf` if necessary
-
-4. Submit a pull request
-
-## License
-
-MIT License
-
-## Notes
-
-* Ensure network connectivity for downloading tool scripts
-
-* Tested on Photon Linux and Ubuntu 22.x
-
-* Supports dynamically adding/removing categories and tools via `tools.conf`
