@@ -8,13 +8,21 @@
 CONFIG_FILE="./tools.conf"
 BASE_DIR="./tools"
 
-# Colors
-BOLD=$(tput bold)
-RESET=$(tput sgr0)
-CYAN=$(tput setaf 6)
-YELLOW=$(tput setaf 3)
-GREEN=$(tput setaf 2)
-RED=$(tput setaf 1)
+# Hardcoded settings (no ENV needed)
+PAGE_SIZE=20                 # Tools per page
+CONNECT_TIMEOUT=5            # curl connect timeout (seconds)
+MAX_TIME=60                  # curl max time (seconds)
+DOWNLOAD_RETRIES=3           # curl retries on transient failures
+
+# Colors (graceful fallback if tput/TERM unsupported)
+BOLD=""; RESET=""; CYAN=""; YELLOW=""; GREEN=""; RED=""
+if command -v tput >/dev/null 2>&1 && [[ -t 1 ]]; then
+    if [[ $(tput colors 2>/dev/null || echo 0) -ge 8 ]]; then
+        BOLD=$(tput bold); RESET=$(tput sgr0)
+        CYAN=$(tput setaf 6); YELLOW=$(tput setaf 3)
+        GREEN=$(tput setaf 2); RED=$(tput setaf 1)
+    fi
+fi
 
 # Globals
 MENU_OPTIONS=()
@@ -26,21 +34,22 @@ SELECTED_TOOL_NAME=""
 SELECTED_TOOL_DESC=""
 SELECTED_TOOL_URL=""
 SEARCH_TERM=""
+CURRENT_PAGE=0
+TOTAL_PAGES=0
+VISIBLE_COUNT=0
 
-# --- NEW: tiny-timeout feature detection (subsecond-safe) ---
-# Some shells (BusyBox/older) reject fractional -t values.
-# We detect support once and use an array var to pass args portably.
+# Ctrl-C exits cleanly with cleanup
+trap 'echo; echo "${YELLOW}Exiting (Ctrl-C)...${RESET}"; rm -rf -- "$BASE_DIR"/* 2>/dev/null || true; clear; exit 130' INT
+
+# Tiny-timeout feature detection (some shells reject fractional -t)
 supports_subsecond_read() {
     { IFS= read -r -t 0.01 _ 2>/dev/null <<<""; } && return 0 || return 1
 }
 if supports_subsecond_read; then
-    # Fast path for modern bash: ~50ms lookahead for escape sequences
-    READ_TINY_TIMEOUT=(-t 0.05)
+    READ_TINY_TIMEOUT=(-t 0.05)   # ~50ms lookahead for escape sequences
 else
-    # Portable fallback: integer seconds only
-    READ_TINY_TIMEOUT=(-t 1)
+    READ_TINY_TIMEOUT=(-t 1)      # integer seconds only (BusyBox/older)
 fi
-# ------------------------------------------------------------
 
 # Draw menu with dynamic guide
 draw_menu() {
@@ -50,6 +59,7 @@ draw_menu() {
 
     if [[ "$MODE" == "tools" ]]; then
         echo "Category: $SELECTED_CATEGORY"
+        echo "Results: $VISIBLE_COUNT  Page: $((CURRENT_PAGE+1))/$((TOTAL_PAGES==0?1:TOTAL_PAGES))"
     elif [[ "$MODE" == "tool_detail" ]]; then
         echo "Tool: $SELECTED_TOOL_NAME"
         echo
@@ -66,13 +76,13 @@ draw_menu() {
     done
 
     echo
-    # Dynamic guide based on mode
     case "$MODE" in
         "categories")
             echo "${CYAN}↑/↓: Move  Enter: Select  q: Quit${RESET}"
             ;;
         "tools")
-            echo "${CYAN}↑/↓: Move  Enter: Select  b: Back  q: Quit  /: Search${RESET}"
+            # Order switched: n/p first, then / search
+            echo "${CYAN}↑/↓: Move  Enter: Select  b: Back  q: Quit  n/p: Next/Prev page  /: Search${RESET}"
             ;;
         "tool_detail")
             echo "${CYAN}↑/↓: Move  Enter: Select  b: Back  q: Quit${RESET}"
@@ -90,9 +100,10 @@ load_categories() {
         exit 1
     fi
 
-    CATEGORIES_TEMP=$(awk -F'|' '{gsub(/\r/,""); gsub(/^[ \t]+|[ \t]+$/,"",$1); if($1 != "" && $1 !~ /^#/) print $1}' "$CONFIG_FILE" | sort -u)
+    CATEGORIES_TEMP=$(awk -F'|' '{gsub(/\r/,""); gsub(/^[ \t]+|[ \t]+$/,"",$1); if($1 != "" && $1 !~ /^#/) print $1}' "$CONFIG_FILE" | LC_ALL=C sort -u)
 
     while IFS= read -r cat; do
+        [[ -z "$cat" ]] && continue
         MENU_OPTIONS+=("$cat")
         MENU_ACTIONS+=("$cat")
     done <<< "$CATEGORIES_TEMP"
@@ -101,16 +112,16 @@ load_categories() {
     MENU_ACTIONS+=("all")
 }
 
-# Load tools for a selected category (alphabetically, with search filter)
+# Load tools for a selected category (alphabetically, with search filter, paginated)
 load_tools() {
     local filter_category="$1"
     MENU_OPTIONS=()
     MENU_ACTIONS=()
 
-    # Temporary array to hold "name|full_data" for sorting
+    # Temporary array to hold "name|category|name|description|url" for sorting
     local tmp_list=()
 
-    while IFS='|' read -r category name description url; do
+    while IFS='|' read -r category name description url rest; do
         [[ -z "$category" || "$category" == \#* ]] && continue
         category=$(echo "$category" | tr -d '\r' | sed 's/^[ \t]*//;s/[ \t]*$//')
         name=$(echo "$name" | tr -d '\r' | sed 's/^[ \t]*//;s/[ \t]*$//')
@@ -118,22 +129,46 @@ load_tools() {
         url=$(echo "$url" | tr -d '\r' | sed 's/^[ \t]*//;s/[ \t]*$//')
 
         if [[ "$filter_category" == "all" || "$category" == "$filter_category" ]]; then
-            local name_lc=$(echo "$name" | tr '[:upper:]' '[:lower:]')
-            if [[ -z "$SEARCH_TERM" || "$name_lc" == *"$SEARCH_TERM"* ]]; then
+            # Search in names and descriptions (case-insensitive)
+            local name_lc desc_lc
+            name_lc=$(echo "$name" | tr '[:upper:]' '[:lower:]')
+            desc_lc=$(echo "$description" | tr '[:upper:]' '[:lower:]')
+            if [[ -z "$SEARCH_TERM" || "$name_lc" == *"$SEARCH_TERM"* || "$desc_lc" == *"$SEARCH_TERM"* ]]; then
                 tmp_list+=("$name|$category|$name|$description|$url")
             fi
         fi
     done < "$CONFIG_FILE"
 
-    # Sort alphabetically by tool name
-    IFS=$'\n' sorted=($(sort <<<"${tmp_list[*]}"))
+    # Sort alphabetically by tool name (locale-stable)
+    IFS=$'\n' read -r -d '' -a sorted < <(printf '%s\n' "${tmp_list[@]}" | LC_ALL=C sort && printf '\0')
     unset IFS
 
-    for entry in "${sorted[@]}"; do
-        IFS='|' read -r _ category name description url <<< "$entry"
-        MENU_OPTIONS+=("$name")
+    # Pagination bookkeeping
+    VISIBLE_COUNT="${#sorted[@]}"
+    TOTAL_PAGES=$(( (VISIBLE_COUNT + PAGE_SIZE - 1) / PAGE_SIZE ))
+    (( CURRENT_PAGE >= TOTAL_PAGES )) && CURRENT_PAGE=$(( TOTAL_PAGES>0 ? TOTAL_PAGES-1 : 0 ))
+    local start=$(( CURRENT_PAGE * PAGE_SIZE ))
+    local end=$(( start + PAGE_SIZE - 1 ))
+
+    for i in "${!sorted[@]}"; do
+        (( i < start || i > end )) && continue
+        IFS='|' read -r _ category name description url <<< "${sorted[$i]}"
+
+        # Show description in list: "Name — Description"
+        local label="$name — $description"
+        MENU_OPTIONS+=("$label")
         MENU_ACTIONS+=("$category|$name|$description|$url")
     done
+
+    # Pager controls (only when needed)
+    if (( CURRENT_PAGE < TOTAL_PAGES-1 )); then
+        MENU_OPTIONS+=("→ Next page")
+        MENU_ACTIONS+=("next_page")
+    fi
+    if (( CURRENT_PAGE > 0 )); then
+        MENU_OPTIONS+=("← Prev page")
+        MENU_ACTIONS+=("prev_page")
+    fi
 
     MENU_OPTIONS+=("Back to categories")
     MENU_ACTIONS+=("back_categories")
@@ -145,7 +180,7 @@ load_tool_detail() {
     MENU_ACTIONS=("run|$SELECTED_CATEGORY|$SELECTED_TOOL_NAME|$SELECTED_TOOL_DESC|$SELECTED_TOOL_URL" "back")
 }
 
-# Run a tool
+# Run a tool (with simple cache reuse + curl retries)
 run_tool() {
     local category="$1"
     local name="$2"
@@ -155,18 +190,42 @@ run_tool() {
     mkdir -p "$dir"
 
     local script_path="$dir/${name// /_}.sh"
+
+    if [[ -x "$script_path" ]]; then
+        read -rp "Cached copy found. Use cached (u) or re-download (r)? [u/r]: " _ans
+        if [[ "${_ans,,}" != "r" ]]; then
+            echo "${GREEN}Running cached $name...${RESET}"
+            "$script_path"
+            local rc=$?
+            if (( rc == 0 )); then
+                echo "${GREEN}Tool execution finished.${RESET}"
+            else
+                echo "${RED}Tool exited with code $rc.${RESET}"
+            fi
+            read -rp "Press enter to continue..."
+            return
+        fi
+    fi
+
     echo "${GREEN}Downloading tool...${RESET}"
-    if ! curl -fsSL "$url" -o "$script_path"; then
+    if ! curl -fsSL --connect-timeout "$CONNECT_TIMEOUT" --max-time "$MAX_TIME" \
+         --retry "$DOWNLOAD_RETRIES" --retry-delay 1 --retry-all-errors \
+         -o "$script_path" "$url"; then
         echo "${RED}Download failed!${RESET}"
-        read -p "Press enter to continue..."
+        read -rp "Press enter to continue..."
         return
     fi
 
     chmod +x "$script_path"
     echo "${GREEN}Running $name...${RESET}"
     "$script_path"
-    echo "${GREEN}Tool execution finished.${RESET}"
-    read -p "Press enter to continue..."
+    local rc=$?
+    if (( rc == 0 )); then
+        echo "${GREEN}Tool execution finished.${RESET}"
+    else
+        echo "${RED}Tool exited with code $rc.${RESET}"
+    fi
+    read -rp "Press enter to continue..."
 }
 
 # Main menu loop
@@ -195,13 +254,22 @@ menu_loop() {
                     SELECTED_CATEGORY="${MENU_ACTIONS[$CURSOR]}"
                     MODE="tools"
                     SEARCH_TERM=""
+                    CURRENT_PAGE=0
                     load_tools "$SELECTED_CATEGORY"
                     CURSOR=0
                 elif [[ "$MODE" == "tools" ]]; then
-                    IFS='|' read -r data <<< "${MENU_ACTIONS[$CURSOR]}"
+                    data="${MENU_ACTIONS[$CURSOR]}"
                     if [[ "$data" == "back_categories" ]]; then
                         MODE="categories"
                         load_categories
+                        CURSOR=0
+                    elif [[ "$data" == "next_page" ]]; then
+                        ((CURRENT_PAGE++))
+                        load_tools "$SELECTED_CATEGORY"
+                        CURSOR=0
+                    elif [[ "$data" == "prev_page" ]]; then
+                        ((CURRENT_PAGE--))
+                        load_tools "$SELECTED_CATEGORY"
                         CURSOR=0
                     else
                         IFS='|' read -r category name description url <<< "${MENU_ACTIONS[$CURSOR]}"
@@ -239,14 +307,38 @@ menu_loop() {
                 ;;
             "q"|"Q")
                 echo "${YELLOW}Exiting and cleaning up...${RESET}"
-                rm -rf "$BASE_DIR"/*
+                rm -rf -- "$BASE_DIR"/* 2>/dev/null || true
                 clear
                 exit 0
                 ;;
             "/")
                 if [[ "$MODE" == "tools" ]]; then
-                    read -p "Search term: " SEARCH_TERM
+                    read -rp "Search term (blank = reset): " SEARCH_TERM
                     SEARCH_TERM=$(echo "$SEARCH_TERM" | tr '[:upper:]' '[:lower:]')
+                    CURRENT_PAGE=0
+                    load_tools "$SELECTED_CATEGORY"
+                    CURSOR=0
+                fi
+                ;;
+            "n"|"N")
+                if [[ "$MODE" == "tools" && $((CURRENT_PAGE+1)) -lt $TOTAL_PAGES ]]; then
+                    ((CURRENT_PAGE++))
+                    load_tools "$SELECTED_CATEGORY"
+                    CURSOR=0
+                fi
+                ;;
+            "p"|"P")
+                if [[ "$MODE" == "tools" && $CURRENT_PAGE -gt 0 ]]; then
+                    ((CURRENT_PAGE--))
+                    load_tools "$SELECTED_CATEGORY"
+                    CURSOR=0
+                fi
+                ;;
+            "r"|"R")
+                if [[ "$MODE" == "categories" ]]; then
+                    load_categories
+                    CURSOR=0
+                elif [[ "$MODE" == "tools" ]]; then
                     load_tools "$SELECTED_CATEGORY"
                     CURSOR=0
                 fi
