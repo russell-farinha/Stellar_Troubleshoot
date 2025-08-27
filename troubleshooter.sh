@@ -9,7 +9,7 @@ CONFIG_FILE="./tools.conf"
 BASE_DIR="./tools"
 
 # Hardcoded settings (no ENV needed)
-PAGE_SIZE=20                 # Tools per page
+PAGE_SIZE=3                 # Tools per page
 CONNECT_TIMEOUT=5            # curl connect timeout (seconds)
 MAX_TIME=60                  # curl max time (seconds)
 DOWNLOAD_RETRIES=3           # curl retries on transient failures
