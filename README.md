@@ -1,210 +1,156 @@
 # Stellar Troubleshoot
 
-A **standalone, menu-driven debugger** for Stellar Cyber services on Linux (Photon/Ubuntu).
-
-Support engineers maintain a simple `tools.conf`; each entry points to a script (e.g., a GitHub Gist raw URL). The troubleshooter reads `tools.conf`, shows a navigable menu, and downloads/runs the chosen script locally.
-
-- Minimal dependencies: **bash**, **curl**, and (optionally) **python** for Python tools.
-- No environment variables required.
-- Pagination, search (names + descriptions), runtime auto-detection, and a clear footer are built in.
+A **modular, menu‑driven troubleshooting tool** for Stellar Cyber Photon/Ubuntu sensors. This script lets support engineers navigate categories of tools defined in `tools.conf`, view descriptions, and run troubleshooting scripts directly on Linux systems.
 
 ---
 
 ## Features
 
-- **Dynamic Catalog**  
-  Reads categories and tools from `tools.conf` (pipe-separated). Multi-word categories supported. Windows newlines (CRLF) are handled.
+- Dynamic category listing based on `tools.conf`
+- Alphabetical sorting of tools within each category
+- Two‑step UI:
+  1. **Categories view** – select a category
+  2. **Tools view** – select a tool to view details and run it
+- Tool detail view with options to **run the tool** or go back
+- Integrated search for **tool names** (in Tools mode)
+- Compatible with **Photon Linux** and **Ubuntu 22.x**
+- Automatic cleanup of downloaded scripts on exit
+- Portable key handling with a **fractional timeout fallback** (works on BusyBox/older shells that require integer timeouts)
 
-- **Alphabetical Tools**  
-  Tools are sorted by name using a locale-stable sort (`LC_ALL=C`) so ordering is consistent across systems.
-
-- **Pagination**  
-  Hardcoded `PAGE_SIZE=5` with `n`/`p` navigation. Footer shows **Results** and **Page** counters.
-
-- **Search (case-insensitive)**  
-  `/` filters by **tool name and description**. Blank search resets the filter. Search resets to page 1.
-
-- **List shows description**  
-  Tools appear as `Name — Description` in the Tools list.
-
-- **Reload (`r`)**  
-  In **Categories** or **Tools**, pressing `r` cleans up downloaded scripts and quits.
-
-- **Two-step UI**  
-  Categories → Tools → Tool Detail (with Run/Back). Tool Detail shows the Description and **Runtime** (bash/python).
-
-- **Runtime auto-detection (Bash & Python)**  
-  - If the URL ends with `.sh`, the tool runs with **bash**.  
-  - If the URL ends with `.py`, the tool runs with **python** (`python3` preferred, then `python`).  
-  - (Optional) If a **5th column** in `tools.conf` is present and equals `bash` or `python`, that explicit value overrides the URL inference.
-
-- **Download retries & simple cache**  
-  `curl` uses timeouts/retries (no `--retry-all-errors` for old curl). If the same tool was already downloaded during the session, you’re prompted to reuse the cached copy or re-download.
-
-- **Safe colors**  
-  Gracefully disables color if `tput`/terminal don’t support it.
-
-- **Ctrl-C behavior**  
-  Immediately cleans up downloaded scripts, clears the screen, and exits with code **130**.
-
-- **Quit**  
-  `q` exits immediately **without cleanup**.  
-  `r` performs cleanup **and** quits.
+> Note: This project targets **Linux**. A Windows/PowerShell sibling may be built later.
 
 ---
 
 ## Requirements
 
-- **bash**, **curl**
-- **python3** (or **python**) only if you intend to run Python tools
-- Network access to the raw URLs in `tools.conf`
+- **Bash**
+- **curl** (for downloading scripts)
+- Photon Linux or Ubuntu 22.x
+- Network access to the URLs defined in `tools.conf`
 
 ---
 
 ## Installation
 
-```bash
-# Put these two files together
-./troubleshooter.sh
-./tools.conf
+1. Clone the repository:
 
-chmod +x ./troubleshooter.sh
-```
+    ```bash
+    git clone https://github.com/yourusername/stellar-troubleshoot.git
+    cd stellar-troubleshoot
+    ```
+
+2. Make the script executable:
+
+    ```bash
+    chmod +x troubleshooter.sh
+    ```
+
+3. Ensure `tools.conf` exists in the same directory and follows this format:
+
+    ```
+    # CATEGORY|NAME|DESCRIPTION|URL
+    ```
 
 ---
 
 ## Usage
 
+Run the troubleshooter:
 ```bash
 ./troubleshooter.sh
 ```
 
-### Keybindings
+---
 
-- **Arrow Up/Down**: Move selection
-- **Enter**: Select item
-- **b**: Back (from Tool Detail → Tools, or Tools → Categories)
-- **q**: Quit immediately (no cleanup)
-- **r**: Cleanup downloaded tools and quit
-- **Ctrl-C**: Cleanup downloaded tools and quit (exit code 130)
-- **n / p** (Tools view): Next/Prev page
-- **/** (Tools view): Search (name + description). Blank input resets the filter.
+## Navigation
 
-### Footer & Counters
+- `↑/↓` – Move up/down
 
-- In **Tools** view you’ll see:  
-  `Results: <match_count>  Page: <current>/<total>`  
+- `Enter` – Select highlighted option
+
+- `b` – Back (available in Tools and Tool Detail modes)
+
+- `/` – Search tool **names** (Tools mode; **blank search resets filter**)
+
+- `q` – Quit and clean up downloaded tools
+
+**Esc + Arrow keys** handling works smoothly on modern bash; on BusyBox/older shells that don’t support sub‑second timeouts, the script automatically falls back to integer timeouts.
 
 ---
 
 ## Workflow
 
-1. **Pick a category** (from `tools.conf`)  
-2. **Pick a tool** (`Name — Description`, alphabetically)  
-3. **Tool Detail** shows the Description and **Runtime**. Choose:
-   - **Run tool** → downloads and runs it (bash or python)
-   - **Back to tools**
+1. **Select a category** – categories are dynamically loaded from `tools.conf`
 
-When running a tool:
-- If a same-session cached copy exists, you’ll be asked: **use cached** or **re-download**.
-- On success, you’ll see the exit status; press Enter to return.
-- On download failure, a clear message is shown; press Enter to return.
+2. **Select a tool** – tools are shown alphabetically
 
-On exit (`q`, `r`, or Ctrl-C), behavior differs:  
-- `q` quits immediately, no cleanup.  
-- `r` and **Ctrl-C** perform cleanup of `./tools/*` and quit.
+3. **Tool detail view** – shows the description and lets you:
+
+    - **Run tool** – downloads and runs the script
+
+    - **Back to tools** – return to the tool list
+
+## Configuration: `tools.conf`
+
+- Format: `CATEGORY|NAME|DESCRIPTION|URL`
+
+- Lines starting with `#` are ignored
+
+- Multi‑word categories are supported
+
+- Update tools by editing this file (you can keep the same `troubleshooter.sh` on services and only ship an updated `tools.conf`)
+
+Example (aligned with default categories):
+
+```
+# CATEGORY|NAME|DESCRIPTION|URL
+General Sensor Tools|Addition|Simple 'Addition' script that adds 2 integers|GIST-RAW-URL
+Connectors|Subtraction|Simple 'Subtraction' script that subtracts 2 integers|GIST-RAW-URL
+System Diagnostics|Firewall Check|Netcats required IPs and respective Ports and displays connectivity results|GIST-RAW-URL
+```
 
 ---
 
-## `tools.conf` format
+## Cleanup
 
-**Minimum 4 columns**, pipe-separated:
-
-```
-CATEGORY | NAME | DESCRIPTION | URL
-```
-
-- Lines starting with `#` are ignored.
-- Whitespace is trimmed.
-- Categories and names can contain spaces.
-- **Descriptions appear in the list view**, so keep them concise.
-
-### (Optional) 5th column to pin runtime
-
-You can add a 5th column with an explicit runtime:
-
-```
-CATEGORY | NAME | DESCRIPTION | URL | RUNTIME
-```
-
-Where `RUNTIME` is `bash` or `python`. This overrides URL-based detection.
-
-**Examples**
-
-```ini
-# 4 columns, runtime inferred from URL:
-General Sensor Tools|Addition|Adds two numbers|https://.../option1.sh
-System Diagnostics|Firewall Check|Netcat to IP:PORT|https://.../firewall_checks.sh
-# Python tool by URL:
-Analytics|Gather Inventory|Collect basic system info|https://.../inv_collector.py
-
-# 5th column overrides (optional):
-Analytics|Gather Inventory (Py)|Collect basic system info|https://.../inv.sh|python
-SRE|Rotate Logs|Rotate service logs safely|https://.../rotate.py|bash
-```
-
-> **Tip:** Use **commit-pinned** raw URLs for scripts. Updating a tool = publish new revision and update just that line in `tools.conf`.
+All downloaded scripts are stored temporarily under `./tools/<Category>` and automatically deleted on quit (and on Ctrl‑C).
 
 ---
 
-## Customization (hardcoded settings)
+## Contributing
 
-At the top of `troubleshooter.sh`:
+1. Fork the repository
 
-```bash
-PAGE_SIZE=5        # Tools per page
-CONNECT_TIMEOUT=5  # curl connect timeout (seconds)
-MAX_TIME=60        # curl overall timeout (seconds)
-DOWNLOAD_RETRIES=3 # curl retries on transient failures
-```
+2. Make your changes
 
-Adjust these numbers directly in the script if needed.
+3. Update `tools.conf` if necessary
 
----
+4. Submit a pull request
 
-## Output, caching, and cleanup
+## Compatibility
 
-- **Download location:** `./tools/<Category>/<Name_with_underscores>.sh|.py`
-- **Cache reuse prompt:** If the file already exists and is non-empty, you can reuse it or re-download.
-- **Cleanup:**  
-  - On `q`: no cleanup (files remain).  
-  - On `r` or **Ctrl-C**: `./tools/*` is deleted and the screen is cleared.
+This tool is designed to be portable across Stellar Cyber platforms.
 
----
+### Baseline Tested Environment (Data Processor: Ubuntu 16.04.7 LTS)
 
-## Troubleshooting
+- **OS**: Ubuntu 16.04.7 LTS (xenial)
+- **Bash**: 4.3.48(1)-release (x86_64-pc-linux-gnu)
+- **Curl**: 7.47.0 (with GnuTLS 3.4.10, zlib 1.2.8, libidn 1.32, librtmp 2.3)
+- **Python**: 3.5.2 (required only for `.py` tools)
+- **Awk**: GNU Awk 4.1.3, API 1.1 (MPFR 3.1.4, GMP 6.1.0)
+- **Sed**: GNU sed 4.2.2
+- **Coreutils**:
+  - sort (GNU coreutils) 8.25
+  - tr (GNU coreutils) 8.25
+- **Terminal**: ANSI/`tput` supported (falls back gracefully if not available)
 
-- **Python not found**  
-  If a Python tool is selected and neither `python3` nor `python` is available, the runner will explain and return to the menu.
+### Notes
 
-- **Arrow keys on older shells**  
-  The script uses a small timeout after `Esc` to read arrow sequences. If sub-second timeouts aren’t supported, it falls back to a 1-second integer timeout for portability.
+- Python is **only required for Python tools**; bash-only tools run without Python installed.
+- The script avoids modern curl flags (e.g., `--retry-all-errors`) for compatibility with curl 7.47.0 (Ubuntu 16.04 default).
+- For consistent results, descriptions in `tools.conf` should remain short (< 80 chars) to avoid wrapping in narrow terminal sessions.
 
-- **Long descriptions wrap**  
-  The list shows `Name — Description`. Very long descriptions may wrap based on terminal width.
-
-- **Download failures**  
-  `curl` has connect/overall timeouts and retries. If a URL is unreachable, you’ll see a clear error and can try again.
-
----
-
-## Security note (quick)
-
-- You are executing remote scripts by design. Keep code review discipline on `tools.conf` and the referenced scripts.
-- If you later want integrity checks (e.g., SHA-256 per tool), we can add an optional column and verify downloads before execution—no workflow disruption.
-
----
 
 ## License
 
-MIT
+MIT License
