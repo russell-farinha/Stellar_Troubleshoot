@@ -1,63 +1,63 @@
 # Stellar Troubleshoot
 
-A **standalone, menu‑driven debugger** for Stellar Cyber services on Linux (Photon/Ubuntu).
-Support engineers maintain a simple `tools.conf` file; each entry points to a script (e.g., a GitHub Gist raw URL). The troubleshooter reads `tools.conf`, shows a navigable menu, and downloads/runs the chosen script locally.
+A **standalone, menu-driven debugger** for Stellar Cyber services on Linux (Photon/Ubuntu).
 
-- No external dependencies beyond `bash` and `curl`.
+Support engineers maintain a simple `tools.conf`; each entry points to a script (e.g., a GitHub Gist raw URL). The troubleshooter reads `tools.conf`, shows a navigable menu, and downloads/runs the chosen script locally.
 
+- Minimal dependencies: **bash**, **curl**, and (optionally) **python** for Python tools.
 - No environment variables required.
-
-- Pagination, searching (names + descriptions), and a clear footer are built in.
+- Pagination, search (names + descriptions), runtime auto-detection, and a clear footer are built in.
 
 ---
 
-## What’s included (current behavior)
+## Features
 
-- **Dynamic Catalog**
-Reads categories and tools from `tools.conf` (pipe‑separated). Multi‑word categories supported. Windows newlines (CRLF) are handled.
+- **Dynamic Catalog**  
+  Reads categories and tools from `tools.conf` (pipe-separated). Multi-word categories supported. Windows newlines (CRLF) are handled.
 
-- **Alphabetical Tools**
-Tools are sorted by name using a locale‑stable sort (`LC_ALL=C`) so ordering is consistent across systems.
+- **Alphabetical Tools**  
+  Tools are sorted by name using a locale-stable sort (`LC_ALL=C`) so ordering is consistent across systems.
 
-- **Pagination**
-Hardcoded `PAGE_SIZE=20` with `n`/`p` navigation; footer shows **Results** and **Page** counters.
+- **Pagination**  
+  Hardcoded `PAGE_SIZE=5` with `n`/`p` navigation. Footer shows **Results** and **Page** counters.
 
-- **Search (case‑insensitive)**
-`/` filters by **tool name and description**. Blank search resets the filter. Search resets to page 1.
+- **Search (case-insensitive)**  
+  `/` filters by **tool name and description**. Blank search resets the filter. Search resets to page 1.
 
-- **List shows description**
-Tools are shown as `Name — Description` in the Tools list.
+- **List shows description**  
+  Tools appear as `Name — Description` in the Tools list.
 
-- **Reload (`r`)**
+- **Reload (`r`)**  
+  In **Categories** or **Tools**, pressing `r` cleans up downloaded scripts and quits.
 
-    - In **Categories**: reloads `tools.conf` and repopulates the category list.
+- **Two-step UI**  
+  Categories → Tools → Tool Detail (with Run/Back). Tool Detail shows the Description and **Runtime** (bash/python).
 
-    - In **Tools**: reloads the current category’s tools (preserves the category selection and resets pagination).
+- **Runtime auto-detection (Bash & Python)**  
+  - If the URL ends with `.sh`, the tool runs with **bash**.  
+  - If the URL ends with `.py`, the tool runs with **python** (`python3` preferred, then `python`).  
+  - (Optional) If a **5th column** in `tools.conf` is present and equals `bash` or `python`, that explicit value overrides the URL inference.
 
-- **Two‑step UI**
-Categories → Tools → Tool Detail (with Run/Back).
+- **Download retries & simple cache**  
+  `curl` uses timeouts/retries (no `--retry-all-errors` for old curl). If the same tool was already downloaded during the session, you’re prompted to reuse the cached copy or re-download.
 
-- **Download retries & simple cache**
-`curl` uses timeouts/retries. If the same tool was already downloaded during the session, you’re prompted to reuse the cached copy or re‑download.
+- **Safe colors**  
+  Gracefully disables color if `tput`/terminal don’t support it.
 
-- **Safe colors**
-Gracefully disables color if `tput`/terminal don’t support it.
+- **Ctrl-C behavior**  
+  Immediately cleans up downloaded scripts, clears the screen, and exits with code **130**.
 
-- **Ctrl‑C behavior**
-Immediately cleans up downloaded scripts, clears the screen, and exits with code **130**. (No lingering loop.)
-
-- **Quit**
-`q` also cleans up and exits.
+- **Quit**  
+  `q` exits immediately **without cleanup**.  
+  `r` performs cleanup **and** quits.
 
 ---
 
 ## Requirements
 
-- **Bash** (default on Photon/Ubuntu)
-
-- **curl**
-
-- Network access to the raw URLs in your `tools.conf`
+- **bash**, **curl**
+- **python3** (or **python**) only if you intend to run Python tools
+- Network access to the raw URLs in `tools.conf`
 
 ---
 
@@ -82,84 +82,78 @@ chmod +x ./troubleshooter.sh
 ### Keybindings
 
 - **Arrow Up/Down**: Move selection
-
 - **Enter**: Select item
-
 - **b**: Back (from Tool Detail → Tools, or Tools → Categories)
-
-- **q**: Quit (cleans temporary downloads)
-
-- **Ctrl‑C**: Quit immediately (cleans temporary downloads, exit code 130)
-
-- **n** / **p** (Tools view): Next/Prev page
-
+- **q**: Quit immediately (no cleanup)
+- **r**: Cleanup downloaded tools and quit
+- **Ctrl-C**: Cleanup downloaded tools and quit (exit code 130)
+- **n / p** (Tools view): Next/Prev page
 - **/** (Tools view): Search (name + description). Blank input resets the filter.
-
-- **r**:
-
-    - **Categories view**: Reload categories from `tools.conf`
-
-    - **Tools view**: Reload tools for the current category
 
 ### Footer & Counters
 
-- In **Tools** view you’ll see:
-`Results: <match_count> Page: <current>/<total>`
-This updates automatically as you search or paginate.
+- In **Tools** view you’ll see:  
+  `Results: <match_count>  Page: <current>/<total>`  
 
 ---
 
 ## Workflow
 
-1. **Pick a category** (from `tools.conf`)
-
-2. **Pick a tool** (list shows `Name — Description`, alphabetically)
-
-3. **Tool Detail** shows the description and lets you:
-
-    - **Run tool**: downloads the script and executes it
-
-    - **Back to tools**
+1. **Pick a category** (from `tools.conf`)  
+2. **Pick a tool** (`Name — Description`, alphabetically)  
+3. **Tool Detail** shows the Description and **Runtime**. Choose:
+   - **Run tool** → downloads and runs it (bash or python)
+   - **Back to tools**
 
 When running a tool:
+- If a same-session cached copy exists, you’ll be asked: **use cached** or **re-download**.
+- On success, you’ll see the exit status; press Enter to return.
+- On download failure, a clear message is shown; press Enter to return.
 
-- If a same‑session cached copy exists, you’ll be asked: **use cached** or **re‑download**.
-
-- On successful run, you’ll see the exit status; press Enter to return.
-
-- On failure to download, a clear message is shown; press Enter to return.
-
-On exit (via `q` or Ctrl‑C), temporary downloads under `./tools/<Category>/` are removed.
+On exit (`q`, `r`, or Ctrl-C), behavior differs:  
+- `q` quits immediately, no cleanup.  
+- `r` and **Ctrl-C** perform cleanup of `./tools/*` and quit.
 
 ---
 
 ## `tools.conf` format
 
-**Minimum 4 columns**, pipe‑separated:
+**Minimum 4 columns**, pipe-separated:
 
-```ini
+```
 CATEGORY | NAME | DESCRIPTION | URL
 ```
 
 - Lines starting with `#` are ignored.
-
 - Whitespace is trimmed.
-
 - Categories and names can contain spaces.
+- **Descriptions appear in the list view**, so keep them concise.
 
-- **Descriptions appear in the list view**, so keep them concise (ideally < 80 characters) for better readability in typical terminal widths.
+### (Optional) 5th column to pin runtime
 
-**Example (matches your current structure)**
+You can add a 5th column with an explicit runtime:
 
-```ini
-# CATEGORY|NAME|DESCRIPTION|URL
-General Sensor Tools|Addition|Simple 'Addition' script that adds 2 integers|https://.../option1.sh
-Connectors|Subtraction|Simple 'Subtraction' script that subtracts 2 integers|https://.../option2.sh
-System Diagnostics|Firewall Check|Netcats required IPs and respective Ports and displays connectivity results|https://.../firewall_checks.sh
-# (You can keep duplicates here for testing if you like.)
+```
+CATEGORY | NAME | DESCRIPTION | URL | RUNTIME
 ```
 
-**Tip**: Use **commit‑pinned** raw URLs for scripts. Updating a tool = publish new revision and update just that line in `tools.conf`.
+Where `RUNTIME` is `bash` or `python`. This overrides URL-based detection.
+
+**Examples**
+
+```ini
+# 4 columns, runtime inferred from URL:
+General Sensor Tools|Addition|Adds two numbers|https://.../option1.sh
+System Diagnostics|Firewall Check|Netcat to IP:PORT|https://.../firewall_checks.sh
+# Python tool by URL:
+Analytics|Gather Inventory|Collect basic system info|https://.../inv_collector.py
+
+# 5th column overrides (optional):
+Analytics|Gather Inventory (Py)|Collect basic system info|https://.../inv.sh|python
+SRE|Rotate Logs|Rotate service logs safely|https://.../rotate.py|bash
+```
+
+> **Tip:** Use **commit-pinned** raw URLs for scripts. Updating a tool = publish new revision and update just that line in `tools.conf`.
 
 ---
 
@@ -168,59 +162,49 @@ System Diagnostics|Firewall Check|Netcats required IPs and respective Ports and 
 At the top of `troubleshooter.sh`:
 
 ```bash
-PAGE_SIZE=20       # Tools per page
+PAGE_SIZE=5        # Tools per page
 CONNECT_TIMEOUT=5  # curl connect timeout (seconds)
 MAX_TIME=60        # curl overall timeout (seconds)
 DOWNLOAD_RETRIES=3 # curl retries on transient failures
 ```
 
-Adjust these numbers directly in the script if needed. No env vars are required or used.
+Adjust these numbers directly in the script if needed.
 
 ---
 
-## Output, caching, and cleanup details
+## Output, caching, and cleanup
 
-- **Download location**: `./tools/<Category>/<Name_with_underscores>.sh`
-
-- **Cache reuse prompt**: If the file already exists and is executable, you can reuse it or force a re‑download.
-
-- **Cleanup**: On `q` or Ctrl‑C, `./tools/*` is deleted and the screen is cleared.
+- **Download location:** `./tools/<Category>/<Name_with_underscores>.sh|.py`
+- **Cache reuse prompt:** If the file already exists and is non-empty, you can reuse it or re-download.
+- **Cleanup:**  
+  - On `q`: no cleanup (files remain).  
+  - On `r` or **Ctrl-C**: `./tools/*` is deleted and the screen is cleared.
 
 ---
 
 ## Troubleshooting
 
-- **Arrow keys don’t work reliably on some shells**
-The script uses a tiny timeout after `Esc` to read arrow sequences. If a shell doesn’t support sub‑second timeouts, it falls back to an integer timeout. This may feel slightly less snappy, but it’s portable.
+- **Python not found**  
+  If a Python tool is selected and neither `python3` nor `python` is available, the runner will explain and return to the menu.
 
-- **Long descriptions wrap**
-The list shows `Name — Description` per line. If descriptions are too long for your terminal width, you may see wrapping. Keep descriptions short for the cleanest UI.
+- **Arrow keys on older shells**  
+  The script uses a small timeout after `Esc` to read arrow sequences. If sub-second timeouts aren’t supported, it falls back to a 1-second integer timeout for portability.
 
-- **Download failures**
-The script uses `curl` with connect/overall timeouts and automatic retries. If a URL is unreachable, you’ll see a clear error and can try again.
+- **Long descriptions wrap**  
+  The list shows `Name — Description`. Very long descriptions may wrap based on terminal width.
+
+- **Download failures**  
+  `curl` has connect/overall timeouts and retries. If a URL is unreachable, you’ll see a clear error and can try again.
+
+---
+
+## Security note (quick)
+
+- You are executing remote scripts by design. Keep code review discipline on `tools.conf` and the referenced scripts.
+- If you later want integrity checks (e.g., SHA-256 per tool), we can add an optional column and verify downloads before execution—no workflow disruption.
 
 ---
 
 ## License
 
 MIT
-
----
-
-## Changelog (recent)
-
-- Added **pagination** with `n`/`p` and footer counters
-
-- **Search** now matches **names and descriptions**
-
-- Tools list shows Name — Description
-
-- Added **reload** `r` in **Categories** (reloads categories) and **Tools** (reloads tools for current category)
-
-- **Ctrl‑C** now exits immediately (cleanup + clear + code 130)
-
-- **curl** hardened with timeouts/retries; added session **cache reuse** prompt
-
-- Colors now **degrade gracefully** if `tput`/terminal lack color support
-
-- Sorting is **locale‑stable** for consistent ordering everywhere
