@@ -8,6 +8,12 @@ This build **always re‑downloads** the tool before execution (no cache prompt)
 - `tools.conf` — 4 columns: `CATEGORY|NAME|DESCRIPTION|URL`
 
 ## Usage
+
+### Requirements
+- `bash`
+- `curl`
+- Standard Unix text utilities: `awk`, `sed`, `sort`, `tr`
+
 ```bash
 chmod +x troubleshooter.sh
 ./troubleshooter.sh
