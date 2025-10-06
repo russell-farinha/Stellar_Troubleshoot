@@ -167,8 +167,11 @@ load_tools() {
     done < "$CONFIG_FILE"
 
     # Sort alphabetically by tool name (locale-stable)
-    IFS=$'\n' read -r -d '' -a sorted < <(printf '%s\n' "${tmp_list[@]}" | LC_ALL=C sort && printf '\0')
-    unset IFS
+    local -a sorted=()
+    if (( ${#tmp_list[@]} > 0 )); then
+        local IFS=$'\n'
+        read -r -d '' -a sorted < <(printf '%s\n' "${tmp_list[@]}" | LC_ALL=C sort && printf '\0')
+    fi
 
     # Pagination bookkeeping
     VISIBLE_COUNT="${#sorted[@]}"

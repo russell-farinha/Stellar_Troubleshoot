@@ -12,14 +12,14 @@ tests_passed=0
 tests_failed=0
 
 fail() {
-    local name="$1" message="$2"
-    printf '❌ %s: %s\n' "$name" "$message"
+    local test_name="$1" message="$2"
+    printf '❌ %s: %s\n' "$test_name" "$message"
     ((tests_failed++)) || true
 }
 
 pass() {
-    local name="$1"
-    printf '✅ %s\n' "$name"
+    local test_name="$1"
+    printf '✅ %s\n' "$test_name"
     ((tests_passed++)) || true
 }
 
@@ -33,11 +33,11 @@ assert_equals() {
 }
 
 run_test() {
-    local name="$1"
-    if "$name"; then
-        pass "$name"
+    local test_name="$1"
+    if "$test_name"; then
+        pass "$test_name"
     else
-        fail "$name" "unexpected failure"
+        fail "$test_name" "unexpected failure"
     fi
 }
 
@@ -107,16 +107,45 @@ SCRIPT
     return 0
 }
 
+test_load_tools_handles_empty_search() {
+    MODE="tools"
+    SEARCH_TERM="nonexistent-term"
+    CURRENT_PAGE=0
+    CURSOR=0
+    load_tools "all"
+
+    if [[ ${#MENU_OPTIONS[@]} -eq 0 ]]; then
+        printf 'menu options should always include navigation\n'
+        return 1
+    fi
+
+    local last_index=$(( ${#MENU_ACTIONS[@]} - 1 ))
+    if (( last_index < 0 )); then
+        printf 'menu actions unexpectedly empty\n'
+        return 1
+    fi
+
+    if [[ "${MENU_ACTIONS[$last_index]}" != "back_categories" ]]; then
+        printf 'missing back navigation\n'
+        return 1
+    fi
+
+    return 0
+}
+
 # ---------------------------------------------------------------------------
 
 main() {
-    local test
-    for test in \
-        test_detect_runtime_respects_explicit \
-        test_detect_runtime_inferrs_extension \
-        test_draw_menu_survives_clear_failure \
+    local tests=(
+        test_detect_runtime_respects_explicit
+        test_detect_runtime_inferrs_extension
+        test_draw_menu_survives_clear_failure
         test_run_tool_handles_failing_cached_script
-    do
+        test_load_tools_handles_empty_search
+    )
+
+    local test
+    for test in "${tests[@]}"; do
         run_test "$test"
     done
 
