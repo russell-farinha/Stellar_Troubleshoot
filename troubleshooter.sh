@@ -6,6 +6,8 @@ set -euo pipefail
 # Ubuntu/Photon, dependency-free (bash + curl; optional python)
 #
 
+SCRIPT_VERSION="1.0.0"
+
 CONFIG_FILE="./tools.conf"
 BASE_DIR="./tools"
 
@@ -79,7 +81,12 @@ detect_runtime() {
 # --- UI ---------------------------------------------------------------------
 draw_menu() {
     clear || true
-    echo "${BOLD}${CYAN}=== Stellar Troubleshoot ===${RESET}"
+    local header="=== Stellar Troubleshoot"
+    if [[ -n "$SCRIPT_VERSION" ]]; then
+        header+=" v$SCRIPT_VERSION"
+    fi
+    header+=" ==="
+    echo "${BOLD}${CYAN}${header}${RESET}"
     echo
 
     if [[ "$MODE" == "tools" ]]; then
@@ -428,5 +435,27 @@ if [[ ! -f "$CONFIG_FILE" ]]; then
 fi
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
-    menu_loop
+    case "${1:-}" in
+        -V|--version)
+            echo "Stellar Troubleshoot $SCRIPT_VERSION"
+            exit 0
+            ;;
+        -h|--help)
+            cat <<'USAGE'
+Stellar Troubleshoot - interactive tool runner
+
+Usage: troubleshooter.sh [options]
+
+Options:
+  -h, --help       Show this help message and exit
+  -V, --version    Print the script version and exit
+
+Running without options starts the interactive menu.
+USAGE
+            exit 0
+            ;;
+        *)
+            menu_loop
+            ;;
+    esac
 fi

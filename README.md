@@ -24,6 +24,12 @@ chmod +x troubleshooter.sh
 ./troubleshooter.sh --run --tool "Firewall Check" --category "System Diagnostics"
 ```
 
+### Check version
+
+```bash
+./troubleshooter.sh --version
+```
+
 ### Options
 - `--config PATH`     Path to `tools.conf` (default: ./tools.conf)
 - `--page-size N`     Items per page in menu (default: 8)
@@ -51,6 +57,17 @@ Automated smoke tests cover key behaviours such as runtime detection, menu rende
 ```bash
 ./tests/run_tests.sh
 ```
+
+## Versioning workflow
+
+The project tracks its release number through the `SCRIPT_VERSION` constant near the top of `troubleshooter.sh`. To decide when and how to bump it:
+
+1. **Group changes by user impact.** Bug fixes or documentation-only tweaks can share a patch release (e.g., `1.2.3 → 1.2.4`). Backwards-compatible feature work usually merits a minor bump (`1.2.3 → 1.3.0`), while breaking changes or large rewrites justify a major release (`1.2.3 → 2.0.0`).
+2. **Update tests and docs in the same change.** The smoke test suite includes coverage for `--version`; refresh the expected value whenever you increment the constant, and mention notable changes in the README or changelog if present.
+3. **Keep commits focused.** Each version bump should include only the modifications that correspond to the new release. Avoid mixing unrelated refactors with a version update so history stays easy to audit.
+4. **Tag the release when merging.** After the pull request lands, create a git tag (e.g., `git tag v1.3.0 && git push origin v1.3.0`) so downstream users can pin to a specific revision.
+
+If you're ever unsure which increment is appropriate, ask a maintainer for guidance and err on the side of smaller bumps—you can always ship another patch if needed.
 
 The script follows the standard “test first” loop:
 
