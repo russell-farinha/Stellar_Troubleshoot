@@ -258,7 +258,16 @@ CONF
         return 1
     fi
 
-    if [[ "${MENU_OPTIONS[-1]}" != "Back to categories" ]]; then
+    if [[ ${#MENU_OPTIONS[@]} -eq 0 ]]; then
+        printf 'menu options unexpectedly empty\n'
+        PAGE_SIZE="$original_page_size"
+        CONFIG_FILE="$original_config"
+        rm -f "$tmp_conf"
+        return 1
+    fi
+
+    local last_index=$(( ${#MENU_OPTIONS[@]} - 1 ))
+    if [[ "${MENU_OPTIONS[$last_index]}" != "Back to categories" ]]; then
         printf 'missing back to categories entry\n'
         PAGE_SIZE="$original_page_size"
         CONFIG_FILE="$original_config"
@@ -335,7 +344,15 @@ CONF
         return 1
     fi
 
-    if [[ "${MENU_OPTIONS[-1]}" != "Back to categories" ]]; then
+    if [[ ${#MENU_OPTIONS[@]} -eq 0 ]]; then
+        printf 'search returned an empty menu\n'
+        CONFIG_FILE="$original_config"
+        rm -f "$tmp_conf"
+        return 1
+    fi
+
+    local last_index=$(( ${#MENU_OPTIONS[@]} - 1 ))
+    if [[ "${MENU_OPTIONS[$last_index]}" != "Back to categories" ]]; then
         printf 'missing back navigation for search results\n'
         CONFIG_FILE="$original_config"
         rm -f "$tmp_conf"
