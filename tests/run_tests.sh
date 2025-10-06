@@ -133,6 +133,22 @@ test_load_tools_handles_empty_search() {
     return 0
 }
 
+test_cli_version_flag() {
+    local output
+    if ! output=$("$ROOT_DIR/troubleshooter.sh" --version); then
+        printf 'version command failed\n'
+        return 1
+    fi
+
+    local expected="Stellar Troubleshoot $SCRIPT_VERSION"
+    if [[ "$output" != "$expected" ]]; then
+        printf 'expected "%s" but got "%s"\n' "$expected" "$output"
+        return 1
+    fi
+
+    return 0
+}
+
 # ---------------------------------------------------------------------------
 
 main() {
@@ -142,6 +158,7 @@ main() {
         test_draw_menu_survives_clear_failure
         test_run_tool_handles_failing_cached_script
         test_load_tools_handles_empty_search
+        test_cli_version_flag
     )
 
     local test
