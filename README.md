@@ -86,7 +86,7 @@ All contributions undergo the standard pull-request review process, which includ
 
 ## Content
 
-- The `debugging 123` tool can be run on the `xyz` environment by selecting it from the menu or invoking `./troubleshooter.sh --run --tool "debugging 123" --category "xyz"`.
+- Tools defined in `tools.conf` appear in the interactive menu and can also be executed non-interactively with `--run`, provided you supply matching `--tool` and `--category` values.
 - Automated smoke tests cover key behaviours such as runtime detection, menu rendering under `clear` failures, and cached tool execution when the tool itself exits non-zero. Run them locally before opening a pull request:
 
   ```bash
