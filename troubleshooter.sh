@@ -424,4 +424,6 @@ if [[ ! -f "$CONFIG_FILE" ]]; then
     exit 1
 fi
 
-menu_loop
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    menu_loop
+fi
