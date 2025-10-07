@@ -1,11 +1,14 @@
 # Project Orion
 
-Project Orion is a simple, menu-driven runner for external scripts (Gist/raw URLs).
-This build **always re-downloads** the tool before execution (no cache prompt).
+Project Orion is a simple, menu-driven runner for external scripts (for example
+Gists or other raw URLs). The first time a tool is launched it is downloaded to
+`./tools/`; subsequent runs reuse the cached copy unless you explicitly ask for
+a fresh download.
 
 ## Files
-- `troubleshooter.sh` — main runner (interactive + `--run` CLI)
-- `tools.conf` — 4 columns: `CATEGORY|NAME|DESCRIPTION|URL`
+- `troubleshooter.sh` — main runner that provides the interactive menu and CLI
+  flags (`--help`, `--version`).
+- `tools.conf` — configuration file listing tool metadata and source URLs.
 
 ## Usage
 
@@ -19,34 +22,27 @@ chmod +x troubleshooter.sh
 ./troubleshooter.sh
 ```
 
-### Run directly
-```bash
-./troubleshooter.sh --run --tool "Firewall Check" --category "System Diagnostics"
-```
-
-### Check version
+Running without arguments starts the interactive menu. Two CLI flags are
+available for quick checks:
 
 ```bash
+./troubleshooter.sh --help
 ./troubleshooter.sh --version
 ```
 
-### Options
-- `--config PATH`     Path to `tools.conf` (default: ./tools.conf)
-- `--page-size N`     Items per page in menu (default: 8)
-- `--run`             Non-interactive mode
-- `--tool NAME`       Tool name (exact)
-- `--category NAME`   Category filter for --run
-- `--quiet`           Suppress non-essential output
+Both commands exit immediately after printing their respective information.
 
 ## Config format
-Each line:
+Each non-comment line in `tools.conf` must contain four required columns
+(`CATEGORY|NAME|DESCRIPTION|URL`) and may optionally supply a fifth column to
+pin the runtime (`bash` or `python`):
 ```
-CATEGORY|NAME|DESCRIPTION|URL
+CATEGORY|NAME|DESCRIPTION|URL[|RUNTIME]
 ```
 
-The runtime is inferred from the URL extension:
-- `.sh` → runs with `bash`
-- `.py` → runs with `python3` (falls back to `python`)
+If the runtime column is omitted, Project Orion infers it from the URL
+extension (`.sh` → bash, `.py` → python). Any other extension defaults to bash
+for backwards compatibility.
 
 Keep your URLs **commit‑pinned** when possible to avoid unexpected changes.
 
@@ -81,13 +77,14 @@ All contributions undergo the standard pull-request review process, which includ
 
 - Clone the repository: `git clone <repo-url>`.
 - Ensure execution permissions: `chmod +x troubleshooter.sh`.
-- Run locally via `./troubleshooter.sh` or specify `--run` options for scripted execution.
+- Launch locally via `./troubleshooter.sh` to open the interactive menu.
 - For CI/CD environments, point to the tagged release tarball or a commit hash to guarantee reproducibility.
 
 ## Content
 
-- Tools defined in `tools.conf` appear in the interactive menu and can also be executed non-interactively with `--run`, provided you supply matching `--tool` and `--category` values.
-- Automated smoke tests cover key behaviours such as runtime detection, menu rendering under `clear` failures, and cached tool execution when the tool itself exits non-zero. Run them locally before opening a pull request:
+- Tools defined in `tools.conf` appear in the interactive menu, grouped by category. You can filter them with `/` search, paginate with `n`/`p`, and view details before choosing to run.
+- When launching a tool, Project Orion offers to reuse a cached download or to fetch a fresh copy. Downloads respect retry limits and configurable timeouts baked into `troubleshooter.sh`.
+- Automated smoke tests cover key behaviours such as runtime detection, menu rendering under `clear` failures, pagination, search filtering, cached tool execution, and re-download requests. Run them locally before opening a pull request:
 
   ```bash
   ./tests/run_tests.sh
