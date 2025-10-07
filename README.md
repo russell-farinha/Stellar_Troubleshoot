@@ -71,14 +71,12 @@ All contributions undergo the standard pull-request review process, which includ
 2. Prepare a release branch, update `SCRIPT_VERSION`, and refresh documentation as needed.
 3. Run `./tests/run_tests.sh` and any additional environment-specific smoke checks.
 4. Tag the release (e.g., `git tag vX.Y.Z`) and publish release notes that summarize key changes and known issues.
-5. Notify stakeholders once the tag and notes are live.
 
 ## How-To Access
 
 - Clone the repository: `git clone <repo-url>`.
 - Ensure execution permissions: `chmod +x troubleshooter.sh`.
 - Launch locally via `./troubleshooter.sh` to open the interactive menu.
-- For CI/CD environments, point to the tagged release tarball or a commit hash to guarantee reproducibility.
 
 ## Content
 
