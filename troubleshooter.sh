@@ -45,6 +45,10 @@ CURRENT_PAGE=0
 TOTAL_PAGES=0
 VISIBLE_COUNT=0
 
+EVENT_LOG_PATH="${TS_EVENT_LOG:-}"
+EVENT_LOG_ENABLED=0
+EVENT_LOG_INITIALIZED=0
+
 # Ctrl-C exits cleanly with cleanup
 trap 'echo; echo "${YELLOW}Exiting (Ctrl-C)...${RESET}"; rm -rf -- "$BASE_DIR"/* 2>/dev/null || true; clear || true; exit 130' INT
 
@@ -57,6 +61,48 @@ if supports_subsecond_read; then
 else
     READ_TINY_TIMEOUT=(-t 1)      # integer seconds only (BusyBox/older)
 fi
+
+repr() {
+    printf '%q' "$1"
+}
+
+log_event() {
+    (( EVENT_LOG_ENABLED )) || return 0
+
+    local ts
+    if ! ts=$(date +'%Y-%m-%dT%H:%M:%S%z' 2>/dev/null); then
+        ts=$(date 2>/dev/null || printf 'unknown-time')
+    fi
+
+    local message="$*"
+    if ! printf '%s %s\n' "$ts" "$message" >> "$EVENT_LOG_PATH" 2>/dev/null; then
+        EVENT_LOG_ENABLED=0
+        echo "${YELLOW}Warning: disabling event logging (failed to write ${EVENT_LOG_PATH}).${RESET}" >&2
+    fi
+}
+
+init_event_log() {
+    (( EVENT_LOG_INITIALIZED )) && return 0
+    EVENT_LOG_INITIALIZED=1
+
+    [[ -n "$EVENT_LOG_PATH" ]] || return 0
+
+    local dir
+    dir=$(dirname -- "$EVENT_LOG_PATH")
+    if [[ -n "$dir" && "$dir" != "." ]]; then
+        if ! mkdir -p -- "$dir" 2>/dev/null; then
+            echo "${YELLOW}Warning: unable to create directory for TS_EVENT_LOG (${EVENT_LOG_PATH}). Event logging disabled.${RESET}" >&2
+            return 0
+        fi
+    fi
+
+    if touch -- "$EVENT_LOG_PATH" 2>/dev/null; then
+        EVENT_LOG_ENABLED=1
+        log_event "logging_enabled path=$(repr "$EVENT_LOG_PATH")"
+    else
+        echo "${YELLOW}Warning: cannot write to TS_EVENT_LOG path (${EVENT_LOG_PATH}). Event logging disabled.${RESET}" >&2
+    fi
+}
 
 lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
 
@@ -349,15 +395,20 @@ menu_loop() {
     CURSOR=0
     MODE="categories"
     load_categories
+    init_event_log
+    log_event "menu_loop_start mode=$MODE"
 
     while true; do
         draw_menu
         if ! read -rsn1 key; then
+            log_event "read_failed mode=$MODE"
             continue
         fi
+        log_event "key_read mode=$MODE cursor=$CURSOR key=$(repr "$key")"
         case "$key" in
             $'\x1b')
                 # Use portable tiny-timeout for escape sequence lookahead
+                log_event "escape_start mode=$MODE cursor=$CURSOR"
                 local seq="" ch=""
                 while read -rsn1 "${READ_TINY_TIMEOUT[@]}" ch; do
                     seq+="$ch"
@@ -391,37 +442,51 @@ menu_loop() {
                 seq=${seq//$'\n'/}
 
                 local action=""
+                log_event "escape_sequence_complete mode=$MODE raw=$(repr "$seq")"
                 if action=$(interpret_escape_sequence "$seq"); then
+                    log_event "escape_action mode=$MODE raw=$(repr "$seq") action=$action"
                     case "$action" in
                         up) ((CURSOR--));;
                         down) ((CURSOR++));;
                     esac
+                else
+                    log_event "escape_unhandled mode=$MODE raw=$(repr "$seq")"
                 fi
                 ((CURSOR<0)) && CURSOR=$((${#MENU_OPTIONS[@]}-1))
                 ((CURSOR>=${#MENU_OPTIONS[@]})) && CURSOR=0
+                log_event "cursor_update mode=$MODE cursor=$CURSOR option=$(repr "${MENU_OPTIONS[$CURSOR]-}")"
                 ;;
             "") # Enter
+                log_event "key=enter mode=$MODE cursor=$CURSOR option=$(repr "${MENU_OPTIONS[$CURSOR]-}")"
                 if [[ "$MODE" == "categories" ]]; then
                     SELECTED_CATEGORY="${MENU_ACTIONS[$CURSOR]}"
+                    log_event "enter_select_category category=$(repr "$SELECTED_CATEGORY")"
                     MODE="tools"
                     SEARCH_TERM=""
                     CURRENT_PAGE=0
                     load_tools "$SELECTED_CATEGORY"
                     CURSOR=0
+                    log_event "mode_change mode=$MODE cursor=$CURSOR"
                 elif [[ "$MODE" == "tools" ]]; then
                     data="${MENU_ACTIONS[$CURSOR]}"
                     if [[ "$data" == "back_categories" ]]; then
+                        log_event "enter_back_to_categories"
                         MODE="categories"
                         load_categories
                         CURSOR=0
+                        log_event "mode_change mode=$MODE cursor=$CURSOR"
                     elif [[ "$data" == "next_page" ]]; then
+                        log_event "enter_next_page from=$CURRENT_PAGE"
                         ((CURRENT_PAGE++))
                         load_tools "$SELECTED_CATEGORY"
                         CURSOR=0
+                        log_event "page_change mode=$MODE page=$CURRENT_PAGE cursor=$CURSOR"
                     elif [[ "$data" == "prev_page" ]]; then
+                        log_event "enter_prev_page from=$CURRENT_PAGE"
                         ((CURRENT_PAGE--))
                         load_tools "$SELECTED_CATEGORY"
                         CURSOR=0
+                        log_event "page_change mode=$MODE page=$CURRENT_PAGE cursor=$CURSOR"
                     else
                         IFS='|' read -r category name description url runtime <<< "${MENU_ACTIONS[$CURSOR]}"
                         SELECTED_CATEGORY="$category"
@@ -429,68 +494,94 @@ menu_loop() {
                         SELECTED_TOOL_DESC="$description"
                         SELECTED_TOOL_URL="$url"
                         SELECTED_TOOL_RUNTIME="$runtime"
+                        log_event "enter_tool_detail category=$(repr "$category") name=$(repr "$name")"
                         MODE="tool_detail"
                         load_tool_detail
                         CURSOR=0
+                        log_event "mode_change mode=$MODE cursor=$CURSOR"
                     fi
                 elif [[ "$MODE" == "tool_detail" ]]; then
                     IFS='|' read -r action category name description url runtime <<< "${MENU_ACTIONS[$CURSOR]}"
                     if [[ "$action" == "run" ]]; then
+                        log_event "enter_run_tool category=$(repr "$category") name=$(repr "$name")"
                         run_tool "$category" "$name" "$url" "$runtime"
                         load_tool_detail
                         CURSOR=0
+                        log_event "tool_run_complete cursor=$CURSOR"
                     elif [[ "$action" == "back" ]]; then
+                        log_event "enter_tool_detail_back"
                         MODE="tools"
                         load_tools "$SELECTED_CATEGORY"
                         CURSOR=0
+                        log_event "mode_change mode=$MODE cursor=$CURSOR"
                     fi
                 fi
                 ;;
             "b"|"B")
+                log_event "key=b mode=$MODE cursor=$CURSOR"
                 if [[ "$MODE" == "tools" ]]; then
                     MODE="categories"
                     load_categories
                     CURSOR=0
+                    log_event "mode_change mode=$MODE cursor=$CURSOR"
                 elif [[ "$MODE" == "tool_detail" ]]; then
                     MODE="tools"
                     load_tools "$SELECTED_CATEGORY"
                     CURSOR=0
+                    log_event "mode_change mode=$MODE cursor=$CURSOR"
                 fi
                 ;;
             "q"|"Q")
                 # Quit WITHOUT cleanup
+                log_event "key=q mode=$MODE cursor=$CURSOR action=exit"
                 exit 0
                 ;;
             "r"|"R")
                 # Cleanup and quit
+                log_event "key=r mode=$MODE cursor=$CURSOR action=cleanup_exit"
                 rm -rf -- "$BASE_DIR"/* 2>/dev/null || true
                 clear || true
                 exit 0
                 ;;
             "/")
                 if [[ "$MODE" == "tools" ]]; then
+                    log_event "key=search_prompt mode=$MODE"
                     if ! read -rp "Search term (blank = reset): " SEARCH_TERM; then
+                        log_event "search_read_failed"
                         SEARCH_TERM=""
                     fi
                     SEARCH_TERM=$(lower "$SEARCH_TERM")
+                    log_event "search_applied term=$(repr "$SEARCH_TERM")"
                     CURRENT_PAGE=0
                     load_tools "$SELECTED_CATEGORY"
                     CURSOR=0
+                    log_event "search_refresh cursor=$CURSOR"
                 fi
                 ;;
             "n"|"N")
                 if [[ "$MODE" == "tools" && $((CURRENT_PAGE+1)) -lt $TOTAL_PAGES ]]; then
+                    log_event "key=next_page mode=$MODE from=$CURRENT_PAGE"
                     ((CURRENT_PAGE++))
                     load_tools "$SELECTED_CATEGORY"
                     CURSOR=0
+                    log_event "page_change mode=$MODE page=$CURRENT_PAGE cursor=$CURSOR"
+                else
+                    log_event "key=next_page_ignored mode=$MODE page=$CURRENT_PAGE total=$TOTAL_PAGES"
                 fi
                 ;;
             "p"|"P")
                 if [[ "$MODE" == "tools" && $CURRENT_PAGE -gt 0 ]]; then
+                    log_event "key=prev_page mode=$MODE from=$CURRENT_PAGE"
                     ((CURRENT_PAGE--))
                     load_tools "$SELECTED_CATEGORY"
                     CURSOR=0
+                    log_event "page_change mode=$MODE page=$CURRENT_PAGE cursor=$CURSOR"
+                else
+                    log_event "key=prev_page_ignored mode=$MODE page=$CURRENT_PAGE"
                 fi
+                ;;
+            *)
+                log_event "key_unhandled mode=$MODE cursor=$CURSOR key=$(repr "$key")"
                 ;;
         esac
     done

@@ -32,6 +32,20 @@ available for quick checks:
 
 Both commands exit immediately after printing their respective information.
 
+### Debugging input handling
+
+For additional visibility into key presses (for example, to diagnose terminal
+escape sequences from remote environments), point the `TS_EVENT_LOG`
+environment variable at a writable file when launching the troubleshooter:
+
+```bash
+TS_EVENT_LOG=./debug/input.log ./troubleshooter.sh
+```
+
+The script appends timestamped entries for every key event, including raw
+escape sequences and the interpreted action, so you can compare local and
+remote behaviour. Logging is disabled by default.
+
 ## Config format
 Each non-comment line in `tools.conf` must contain four required columns
 (`CATEGORY|NAME|DESCRIPTION|URL`) and may optionally supply a fifth column to
