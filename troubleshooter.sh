@@ -60,6 +60,38 @@ fi
 
 lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
 
+# Normalize various escape sequences emitted by terminals/tmux for arrow keys.
+# Returns 0 and prints a symbolic action ("up", "down", "left", "right")
+# when recognised; otherwise returns 1.
+interpret_escape_sequence() {
+    local seq="$1"
+    if [[ -z "$seq" ]]; then
+        return 1
+    fi
+
+    if [[ "$seq" =~ ^\[[0-9\;]*A$ || "$seq" == "OA" ]]; then
+        printf 'up'
+        return 0
+    fi
+
+    if [[ "$seq" =~ ^\[[0-9\;]*B$ || "$seq" == "OB" ]]; then
+        printf 'down'
+        return 0
+    fi
+
+    if [[ "$seq" =~ ^\[[0-9\;]*C$ || "$seq" == "OC" ]]; then
+        printf 'right'
+        return 0
+    fi
+
+    if [[ "$seq" =~ ^\[[0-9\;]*D$ || "$seq" == "OD" ]]; then
+        printf 'left'
+        return 0
+    fi
+
+    return 1
+}
+
 # --- Runtime detection -------------------------------------------------------
 # Priority:
 # 1) If a 5th column is present and equals "python" or "bash", use it.
@@ -323,10 +355,17 @@ menu_loop() {
         case "$key" in
             $'\x1b')
                 # Use portable tiny-timeout for escape sequence lookahead
-                if read -rsn2 "${READ_TINY_TIMEOUT[@]}" rest; then
-                    case "$rest" in
-                        '[A') ((CURSOR--));;
-                        '[B') ((CURSOR++));;
+                local seq="" ch=""
+                while read -rsn1 "${READ_TINY_TIMEOUT[@]}" ch; do
+                    seq+="$ch"
+                    [[ "$ch" == [A-Za-z~] ]] && break
+                done
+
+                local action=""
+                if action=$(interpret_escape_sequence "$seq"); then
+                    case "$action" in
+                        up) ((CURSOR--));;
+                        down) ((CURSOR++));;
                     esac
                 fi
                 ((CURSOR<0)) && CURSOR=$((${#MENU_OPTIONS[@]}-1))
