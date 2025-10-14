@@ -175,6 +175,27 @@ test_detect_runtime_defaults_to_bash() {
     assert_equals "bash" "$result" "test_detect_runtime_defaults_to_bash"
 }
 
+test_interpret_escape_sequence_handles_tmux_up_down() {
+    local action
+    action=$(interpret_escape_sequence "OA")
+    assert_equals "up" "$action" "test_interpret_escape_sequence_handles_tmux_up"
+
+    action=$(interpret_escape_sequence "OB")
+    assert_equals "down" "$action" "test_interpret_escape_sequence_handles_tmux_down"
+
+    action=$(interpret_escape_sequence "[1;5A")
+    assert_equals "up" "$action" "test_interpret_escape_sequence_handles_csi_modifiers_up"
+
+    action=$(interpret_escape_sequence "[1;5B")
+    assert_equals "down" "$action" "test_interpret_escape_sequence_handles_csi_modifiers_down"
+
+    action=$(interpret_escape_sequence "[A")
+    assert_equals "up" "$action" "test_interpret_escape_sequence_handles_basic_up"
+
+    action=$(interpret_escape_sequence "[A"$'\r')
+    assert_equals "up" "$action" "test_interpret_escape_sequence_trims_cr"
+}
+
 test_pick_python_prefers_python3() {
     local py
     py=$(pick_python)
@@ -569,6 +590,7 @@ main() {
         test_detect_runtime_respects_explicit
         test_detect_runtime_inferrs_extension
         test_detect_runtime_defaults_to_bash
+        test_interpret_escape_sequence_handles_tmux_up_down
         test_pick_python_prefers_python3
         test_load_categories_sorts_and_appends_all
         test_draw_menu_survives_clear_failure

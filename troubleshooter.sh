@@ -53,12 +53,47 @@ supports_subsecond_read() {
     { IFS= read -r -t 0.01 _ 2>/dev/null <<<""; } && return 0 || return 1
 }
 if supports_subsecond_read; then
-    READ_TINY_TIMEOUT=(-t 0.05)   # ~50ms lookahead for escape sequences
+    READ_TINY_TIMEOUT=(-t 0.2)    # slightly longer lookahead for remote terminals
 else
     READ_TINY_TIMEOUT=(-t 1)      # integer seconds only (BusyBox/older)
 fi
 
 lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
+
+# Normalize various escape sequences emitted by terminals/tmux for arrow keys.
+# Returns 0 and prints a symbolic action ("up", "down", "left", "right")
+# when recognised; otherwise returns 1.
+interpret_escape_sequence() {
+    local seq="$1"
+    if [[ -z "$seq" ]]; then
+        return 1
+    fi
+
+    seq=${seq//$'\r'/}
+    seq=${seq//$'\n'/}
+
+    if [[ "$seq" =~ ^\[[0-9\;]*A$ || "$seq" == "OA" ]]; then
+        printf 'up'
+        return 0
+    fi
+
+    if [[ "$seq" =~ ^\[[0-9\;]*B$ || "$seq" == "OB" ]]; then
+        printf 'down'
+        return 0
+    fi
+
+    if [[ "$seq" =~ ^\[[0-9\;]*C$ || "$seq" == "OC" ]]; then
+        printf 'right'
+        return 0
+    fi
+
+    if [[ "$seq" =~ ^\[[0-9\;]*D$ || "$seq" == "OD" ]]; then
+        printf 'left'
+        return 0
+    fi
+
+    return 1
+}
 
 # --- Runtime detection -------------------------------------------------------
 # Priority:
@@ -323,10 +358,43 @@ menu_loop() {
         case "$key" in
             $'\x1b')
                 # Use portable tiny-timeout for escape sequence lookahead
-                if read -rsn2 "${READ_TINY_TIMEOUT[@]}" rest; then
-                    case "$rest" in
-                        '[A') ((CURSOR--));;
-                        '[B') ((CURSOR++));;
+                local seq="" ch=""
+                while read -rsn1 "${READ_TINY_TIMEOUT[@]}" ch; do
+                    seq+="$ch"
+
+                    if [[ "$seq" == O* ]]; then
+                        # ESC O <letter> style (some terminals)
+                        [[ ${#seq} -ge 2 ]] && break
+                        continue
+                    fi
+
+                    if [[ "$seq" == [* ]]; then
+                        [[ "$ch" == [A-Za-z~] ]] && break
+                        continue
+                    fi
+
+                    # If we hit any other terminating character, bail out to avoid
+                    # blocking on exotic escape sequences.
+                    if [[ "$ch" == $'\r' || "$ch" == $'\n' ]]; then
+                        break
+                    fi
+                done
+
+                # Drain any bytes that arrived after the timeout without waiting.
+                while read -rsn1 -t 0 ch; do
+                    seq+="$ch"
+                done
+
+                # Normalise carriage returns/newlines that some environments append
+                # after arrow key sequences.
+                seq=${seq//$'\r'/}
+                seq=${seq//$'\n'/}
+
+                local action=""
+                if action=$(interpret_escape_sequence "$seq"); then
+                    case "$action" in
+                        up) ((CURSOR--));;
+                        down) ((CURSOR++));;
                     esac
                 fi
                 ((CURSOR<0)) && CURSOR=$((${#MENU_OPTIONS[@]}-1))
