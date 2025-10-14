@@ -1,18 +1,15 @@
 #!/usr/bin/env bash
-set -euo pipefail
 #
 # Stellar Troubleshoot
 # Modular, menu-driven tool for Stellar Cyber services
 # Ubuntu/Photon, dependency-free (bash + curl; optional python)
 #
 
-SCRIPT_VERSION="1.0.0"
-
 CONFIG_FILE="./tools.conf"
 BASE_DIR="./tools"
 
 # Hardcoded settings (no ENV needed)
-PAGE_SIZE=20                 # Tools per page
+PAGE_SIZE=5                  # Tools per page
 CONNECT_TIMEOUT=5            # curl connect timeout (seconds)
 MAX_TIME=60                  # curl max time (seconds)
 DOWNLOAD_RETRIES=3           # curl retries on transient failures
@@ -21,12 +18,9 @@ DOWNLOAD_RETRIES=3           # curl retries on transient failures
 BOLD=""; RESET=""; CYAN=""; YELLOW=""; GREEN=""; RED=""
 if command -v tput >/dev/null 2>&1 && [[ -t 1 ]]; then
     if [[ $(tput colors 2>/dev/null || echo 0) -ge 8 ]]; then
-        BOLD=$(tput bold 2>/dev/null || printf '')
-        RESET=$(tput sgr0 2>/dev/null || printf '')
-        CYAN=$(tput setaf 6 2>/dev/null || printf '')
-        YELLOW=$(tput setaf 3 2>/dev/null || printf '')
-        GREEN=$(tput setaf 2 2>/dev/null || printf '')
-        RED=$(tput setaf 1 2>/dev/null || printf '')
+        BOLD=$(tput bold); RESET=$(tput sgr0)
+        CYAN=$(tput setaf 6); YELLOW=$(tput setaf 3)
+        GREEN=$(tput setaf 2); RED=$(tput setaf 1)
     fi
 fi
 
@@ -46,7 +40,7 @@ TOTAL_PAGES=0
 VISIBLE_COUNT=0
 
 # Ctrl-C exits cleanly with cleanup
-trap 'echo; echo "${YELLOW}Exiting (Ctrl-C)...${RESET}"; rm -rf -- "$BASE_DIR"/* 2>/dev/null || true; clear || true; exit 130' INT
+trap 'echo; echo "${YELLOW}Exiting (Ctrl-C)...${RESET}"; rm -rf -- "$BASE_DIR"/* 2>/dev/null || true; clear; exit 130' INT
 
 # Tiny-timeout feature detection (some shells reject fractional -t)
 supports_subsecond_read() {
@@ -80,13 +74,8 @@ detect_runtime() {
 
 # --- UI ---------------------------------------------------------------------
 draw_menu() {
-    clear || true
-    local header="=== Stellar Troubleshoot"
-    if [[ -n "$SCRIPT_VERSION" ]]; then
-        header+=" v$SCRIPT_VERSION"
-    fi
-    header+=" ==="
-    echo "${BOLD}${CYAN}${header}${RESET}"
+    clear
+    echo "${BOLD}${CYAN}=== Stellar Troubleshoot ===${RESET}"
     echo
 
     if [[ "$MODE" == "tools" ]]; then
@@ -174,11 +163,8 @@ load_tools() {
     done < "$CONFIG_FILE"
 
     # Sort alphabetically by tool name (locale-stable)
-    local -a sorted=()
-    if (( ${#tmp_list[@]} > 0 )); then
-        local IFS=$'\n'
-        read -r -d '' -a sorted < <(printf '%s\n' "${tmp_list[@]}" | LC_ALL=C sort && printf '\0')
-    fi
+    IFS=$'\n' read -r -d '' -a sorted < <(printf '%s\n' "${tmp_list[@]}" | LC_ALL=C sort && printf '\0')
+    unset IFS
 
     # Pagination bookkeeping
     VISIBLE_COUNT="${#sorted[@]}"
@@ -249,30 +235,28 @@ run_tool() {
     local script_path="$dir/${name// /_}.$ext"
 
     if [[ -f "$script_path" && -s "$script_path" ]]; then
-        if ! read -rp "Cached copy found. Use cached (u) or re-download (r)? [u/r]: " _ans; then
-            _ans=""
-        fi
+        read -rp "Cached copy found. Use cached (u) or re-download (r)? [u/r]: " _ans
         if [[ "$(lower "${_ans:-u}")" != "r" ]]; then
             echo "${GREEN}Running cached $name...${RESET}"
-            local rc=0
             if [[ "$runtime" == "python" ]]; then
                 local py; py=$(pick_python)
                 if [[ -z "$py" ]]; then
                     echo "${RED}No python interpreter found (tried python3, python).${RESET}"
-                    read -rp "Press enter to continue..." || true
+                    read -rp "Press enter to continue..."
                     return
                 fi
-                "$py" "$script_path" || rc=$?
+                "$py" "$script_path"
             else
                 chmod +x "$script_path"
-                "$script_path" || rc=$?
+                "$script_path"
             fi
+            local rc=$?
             if (( rc == 0 )); then
                 echo "${GREEN}Tool execution finished.${RESET}"
             else
                 echo "${RED}Tool exited with code $rc.${RESET}"
             fi
-            read -rp "Press enter to continue..." || true
+            read -rp "Press enter to continue..."
             return
         fi
     fi
@@ -282,31 +266,31 @@ run_tool() {
          --retry "$DOWNLOAD_RETRIES" --retry-delay 1 \
          -o "$script_path" "$url"; then
         echo "${RED}Download failed!${RESET}"
-        read -rp "Press enter to continue..." || true
+        read -rp "Press enter to continue..."
         return
     fi
 
     echo "${GREEN}Running $name...${RESET}"
-    local rc=0
     if [[ "$runtime" == "python" ]]; then
         local py; py=$(pick_python)
         if [[ -z "$py" ]]; then
             echo "${RED}No python interpreter found (tried python3, python).${RESET}"
-            read -rp "Press enter to continue..." || true
+            read -rp "Press enter to continue..."
             return
         fi
-        "$py" "$script_path" || rc=$?
+        "$py" "$script_path"
     else
         chmod +x "$script_path"
-        "$script_path" || rc=$?
+        "$script_path"
     fi
 
+    local rc=$?
     if (( rc == 0 )); then
         echo "${GREEN}Tool execution finished.${RESET}"
     else
         echo "${RED}Tool exited with code $rc.${RESET}"
     fi
-    read -rp "Press enter to continue..." || true
+    read -rp "Press enter to continue..."
 }
 
 # Main menu loop
@@ -317,9 +301,7 @@ menu_loop() {
 
     while true; do
         draw_menu
-        if ! read -rsn1 key; then
-            continue
-        fi
+        read -rsn1 key
         case "$key" in
             $'\x1b')
                 # Use portable tiny-timeout for escape sequence lookahead
@@ -396,14 +378,12 @@ menu_loop() {
             "r"|"R")
                 # Cleanup and quit
                 rm -rf -- "$BASE_DIR"/* 2>/dev/null || true
-                clear || true
+                clear
                 exit 0
                 ;;
             "/")
                 if [[ "$MODE" == "tools" ]]; then
-                    if ! read -rp "Search term (blank = reset): " SEARCH_TERM; then
-                        SEARCH_TERM=""
-                    fi
+                    read -rp "Search term (blank = reset): " SEARCH_TERM
                     SEARCH_TERM=$(lower "$SEARCH_TERM")
                     CURRENT_PAGE=0
                     load_tools "$SELECTED_CATEGORY"
@@ -434,28 +414,4 @@ if [[ ! -f "$CONFIG_FILE" ]]; then
     exit 1
 fi
 
-if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
-    case "${1:-}" in
-        -V|--version)
-            echo "Stellar Troubleshoot $SCRIPT_VERSION"
-            exit 0
-            ;;
-        -h|--help)
-            cat <<'USAGE'
-Stellar Troubleshoot - interactive tool runner
-
-Usage: troubleshooter.sh [options]
-
-Options:
-  -h, --help       Show this help message and exit
-  -V, --version    Print the script version and exit
-
-Running without options starts the interactive menu.
-USAGE
-            exit 0
-            ;;
-        *)
-            menu_loop
-            ;;
-    esac
-fi
+menu_loop
