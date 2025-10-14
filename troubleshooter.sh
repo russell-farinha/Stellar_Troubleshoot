@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 #
-# Stellar Troubleshoot
-# Modular, menu-driven tool for Stellar Cyber services
+# Project Orion
+# Modular, menu-driven tool for remote diagnostics
 # Ubuntu/Photon, dependency-free (bash + curl; optional python)
 #
 
 CONFIG_FILE="./tools.conf"
 BASE_DIR="./tools"
+APP_NAME="Project Orion"
+VERSION="1.0.0"
 
 # Hardcoded settings (no ENV needed)
 PAGE_SIZE=5                  # Tools per page
@@ -75,7 +77,7 @@ detect_runtime() {
 # --- UI ---------------------------------------------------------------------
 draw_menu() {
     clear
-    echo "${BOLD}${CYAN}=== Stellar Troubleshoot ===${RESET}"
+    echo "${BOLD}${CYAN}=== ${APP_NAME} v${VERSION} ===${RESET}"
     echo
 
     if [[ "$MODE" == "tools" ]]; then
@@ -408,10 +410,58 @@ menu_loop() {
     done
 }
 
-# Start
-if [[ ! -f "$CONFIG_FILE" ]]; then
-    echo "${RED}Missing config file: $CONFIG_FILE${RESET}"
-    exit 1
-fi
+# CLI helpers
+print_version() {
+    echo "${APP_NAME} ${VERSION}"
+}
 
-menu_loop
+print_usage() {
+    cat <<EOF
+Usage: ${0##*/} [OPTIONS]
+
+Launch the ${APP_NAME} interactive menu for remote diagnostics.
+
+Options:
+  -h, --help      Show this help message and exit
+  -V, --version   Show the ${APP_NAME} version and exit
+EOF
+}
+
+main() {
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -h|--help)
+                print_usage
+                return 0
+                ;;
+            -V|--version)
+                print_version
+                return 0
+                ;;
+            --)
+                shift
+                break
+                ;;
+            -*)
+                echo "${RED}Unknown option: $1${RESET}" >&2
+                print_usage >&2
+                return 1
+                ;;
+            *)
+                echo "${RED}Unexpected argument: $1${RESET}" >&2
+                print_usage >&2
+                return 1
+                ;;
+        esac
+        shift
+    done
+
+    if [[ ! -f "$CONFIG_FILE" ]]; then
+        echo "${RED}Missing config file: $CONFIG_FILE${RESET}"
+        return 1
+    fi
+
+    menu_loop
+}
+
+main "$@"
