@@ -53,12 +53,40 @@ value if needed.
 Each non-comment line in `tools.conf` must contain the following pipe-separated fields:
 
 ```
-CATEGORY|NAME|DESCRIPTION|URL[|RUNTIME|EXTRA...]
+CATEGORY|NAME|DESCRIPTION|URL[|CMD_TEMPLATE|INPUTS_SPEC|RUNTIME|EXTRA...]
 ```
 
-Only the first four columns are required. A fifth column can explicitly set the runtime (`bash` or `python`). Any additional
-columns (for example a checksum) are ignored by the current implementation. When the runtime column is omitted, the launcher
-infers it from the URL extension (`.py` → Python, `.sh` → Bash) and otherwise defaults to Bash.
+Only the first four columns are required. When `CMD_TEMPLATE` is omitted the launcher behaves as it always has: the downloaded
+script is run directly with either Bash or Python. Specifying `CMD_TEMPLATE` enables argument prompts; a matching
+`INPUTS_SPEC` string describes how values are gathered. A runtime override (`bash` or `python`) can still appear in the first
+trailing column when no template is present, or after the argument columns when they are used. Any additional metadata columns
+(for example a checksum) continue to be ignored.
+
+When the runtime column is omitted entirely, the launcher infers it from the URL extension (`.py` → Python, `.sh` → Bash) and
+otherwise defaults to Bash.
+
+Blank lines and comment lines (starting with `#`) are skipped automatically. When running a tool, the script caches it inside
+`./tools/<Category>/<Name>.sh` or `.py`, with spaces in the name replaced by underscores.
+
+### Using arguments with `tools.conf`
+
+- `CMD_TEMPLATE` is the exact command line to execute. Use `{script}` as a placeholder for the downloaded tool path and
+  `{key}` tokens for each prompted value.
+- `INPUTS_SPEC` is a semicolon-delimited list of prompt definitions:
+  - `key=value1/value2/...` shows a choice prompt, with the first option used when you press Enter.
+  - `key=?Label text` shows a required free-text prompt labelled with `Label text` and loops until a non-blank answer is
+    provided.
+- All collected answers are shell-escaped and substituted into the template before execution. Tokenisation is handled with
+  `python3 -c 'import shlex'` when available and falls back to a simple whitespace split otherwise; no `eval` is ever used.
+
+Example entries:
+
+```
+Connectors|Collector Assignments|View/Delete by connector id|https://gist.github.com/.../collector_tool.sh|{script} --action {action} --id {id}|action=view/delete;id=?Connector ID
+Networking|Firewall Check|Run port test|https://gist.github.com/.../fw_check.sh|{script} --host {host} --ports {ports}|host=?Target host;ports=?Comma-separated ports
+```
+
+Rows that only specify the first four columns continue to work without any prompts.
 
 Blank lines and comment lines (starting with `#`) are skipped automatically. When running a tool, the script caches it inside
 `./tools/<Category>/<Name>.sh` or `.py`, with spaces in the name replaced by underscores.
