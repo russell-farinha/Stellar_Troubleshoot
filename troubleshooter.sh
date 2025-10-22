@@ -36,6 +36,8 @@ SELECTED_TOOL_NAME=""
 SELECTED_TOOL_DESC=""
 SELECTED_TOOL_URL=""
 SELECTED_TOOL_RUNTIME=""  # "bash" | "python"
+SELECTED_TOOL_CMD_TEMPLATE=""
+SELECTED_TOOL_INPUTS_SPEC=""
 SEARCH_TERM=""
 CURRENT_PAGE=0
 TOTAL_PAGES=0
@@ -142,16 +144,61 @@ load_tools() {
     MENU_OPTIONS=()
     MENU_ACTIONS=()
 
-    # Temporary array to hold "name|category|name|description|url|runtime" for sorting
+    # Temporary array to hold "name|category|name|description|url|runtime|cmd_template|inputs_spec" for sorting
     local tmp_list=()
 
-    while IFS='|' read -r category name description url runtime_col rest; do
+    while IFS='|' read -r category name description url cmd_tmpl inputs_spec rest; do
         [[ -z "$category" || "$category" == \#* ]] && continue
         category=$(echo "$category" | tr -d '\r' | sed 's/^[ \t]*//;s/[ \t]*$//')
         name=$(echo "$name" | tr -d '\r' | sed 's/^[ \t]*//;s/[ \t]*$//')
         description=$(echo "$description" | tr -d '\r' | sed 's/^[ \t]*//;s/[ \t]*$//')
         url=$(echo "$url" | tr -d '\r' | sed 's/^[ \t]*//;s/[ \t]*$//')
-        local runtime; runtime=$(detect_runtime "$url" "$runtime_col")
+        cmd_tmpl=$(echo "${cmd_tmpl:-}" | tr -d '\r' | sed 's/^[ \t]*//;s/[ \t]*$//')
+        inputs_spec=$(echo "${inputs_spec:-}" | tr -d '\r' | sed 's/^[ \t]*//;s/[ \t]*$//')
+        rest=$(echo "${rest:-}" | tr -d '\r' | sed 's/^[ \t]*//;s/[ \t]*$//')
+
+        # Back-compat: treat a plain "bash"/"python" fifth column as runtime
+        local explicit_runtime=""
+        local cmd_lower="$(lower "$cmd_tmpl")"
+        if [[ -n "$cmd_tmpl" && "$cmd_tmpl" != *"{"* ]]; then
+            case "$cmd_lower" in
+                bash|python)
+                    explicit_runtime="$cmd_lower"
+                    cmd_tmpl=""
+                    ;;
+            esac
+        fi
+
+        # If the would-be inputs spec lacks an '=' sign, treat it as extra metadata
+        if [[ -n "$inputs_spec" && "$inputs_spec" != *"="* ]]; then
+            if [[ -n "$rest" ]]; then
+                rest="$inputs_spec|$rest"
+            else
+                rest="$inputs_spec"
+            fi
+            inputs_spec=""
+        fi
+
+        # Allow explicit runtime in trailing columns as well
+        if [[ -z "$explicit_runtime" && -n "$inputs_spec" ]]; then
+            local maybe_runtime="$(lower "$inputs_spec")"
+            if [[ "$maybe_runtime" == "bash" || "$maybe_runtime" == "python" ]]; then
+                explicit_runtime="$maybe_runtime"
+                inputs_spec=""
+            fi
+        fi
+
+        if [[ -z "$explicit_runtime" && -n "$rest" ]]; then
+            local rest_first="${rest%%|*}"
+            rest_first=$(echo "$rest_first" | sed 's/^[ \t]*//;s/[ \t]*$//')
+            local rest_lower="$(lower "$rest_first")"
+            if [[ "$rest_lower" == "bash" || "$rest_lower" == "python" ]]; then
+                explicit_runtime="$rest_lower"
+            fi
+        fi
+
+        local runtime
+        runtime=$(detect_runtime "$url" "$explicit_runtime")
 
         if [[ "$filter_category" == "all" || "$category" == "$filter_category" ]]; then
             # Search in names and descriptions (case-insensitive)
@@ -159,7 +206,7 @@ load_tools() {
             name_lc=$(lower "$name")
             desc_lc=$(lower "$description")
             if [[ -z "$SEARCH_TERM" || "$name_lc" == *"$SEARCH_TERM"* || "$desc_lc" == *"$SEARCH_TERM"* ]]; then
-                tmp_list+=("$name|$category|$name|$description|$url|$runtime")
+                tmp_list+=("$name|$category|$name|$description|$url|$runtime|$cmd_tmpl|$inputs_spec")
             fi
         fi
     done < "$CONFIG_FILE"
@@ -177,12 +224,12 @@ load_tools() {
 
     for i in "${!sorted[@]}"; do
         (( i < start || i > end )) && continue
-        IFS='|' read -r _ category name description url runtime <<< "${sorted[$i]}"
+        IFS='|' read -r _ category name description url runtime cmd_tmpl inputs_spec <<< "${sorted[$i]}"
 
         # Show description in list: "Name — Description"
         local label="$name — $description"
         MENU_OPTIONS+=("$label")
-        MENU_ACTIONS+=("$category|$name|$description|$url|$runtime")
+        MENU_ACTIONS+=("$category|$name|$description|$url|$runtime|$cmd_tmpl|$inputs_spec")
     done
 
     # Pager controls (only when needed)
@@ -202,7 +249,10 @@ load_tools() {
 # Load tool detail menu (Run / Back)
 load_tool_detail() {
     MENU_OPTIONS=("Run tool" "Back to tools")
-    MENU_ACTIONS=("run|$SELECTED_CATEGORY|$SELECTED_TOOL_NAME|$SELECTED_TOOL_DESC|$SELECTED_TOOL_URL|$SELECTED_TOOL_RUNTIME" "back")
+    MENU_ACTIONS=(
+        "run|$SELECTED_CATEGORY|$SELECTED_TOOL_NAME|$SELECTED_TOOL_DESC|$SELECTED_TOOL_URL|$SELECTED_TOOL_RUNTIME|$SELECTED_TOOL_CMD_TEMPLATE|$SELECTED_TOOL_INPUTS_SPEC"
+        "back"
+    )
 }
 
 # Choose python interpreter (python3 preferred)
@@ -216,12 +266,97 @@ pick_python() {
     fi
 }
 
+_prompt_and_build_cmd() {
+    local tmpl="$1" inputs="$2"
+    local -a map_keys=() map_vals=()
+    local -a pairs=()
+    local raw_pair
+
+    local IFS=';'
+    read -r -a pairs <<< "${inputs:-}"
+    for raw_pair in "${pairs[@]}"; do
+        local pair=$(echo "$raw_pair" | sed 's/^[ \t]*//;s/[ \t]*$//')
+        [[ -z "$pair" ]] && continue
+
+        local key="${pair%%=*}"
+        local value_spec="${pair#*=}"
+        key=$(echo "$key" | sed 's/^[ \t]*//;s/[ \t]*$//')
+        value_spec=$(echo "$value_spec" | sed 's/^[ \t]*//;s/[ \t]*$//')
+        [[ -z "$key" ]] && continue
+
+        local answer=""
+        if [[ "$value_spec" == \?* ]]; then
+            local label="${value_spec#\?}"
+            while :; do
+                read -rp "${label}: " answer
+                if [[ -n "${answer//[[:space:]]/}" ]]; then
+                    break
+                fi
+                echo "Input required."
+            done
+        else
+            local -a opts=()
+            local IFS='/'
+            read -r -a opts <<< "$value_spec"
+            local default="${opts[0]}"
+            local pretty="$value_spec"
+            read -rp "$key [${pretty}] (default: $default): " answer
+            [[ -z "$answer" ]] && answer="$default"
+        fi
+
+        map_keys+=("$key")
+        local escaped
+        escaped=$(printf '%q' "$answer")
+        map_vals+=("$escaped")
+    done
+
+    local out="$tmpl"
+    for i in "${!map_keys[@]}"; do
+        local kk="${map_keys[$i]}"
+        local vv="${map_vals[$i]}"
+        vv="${vv//\\/\\\\}"
+        vv="${vv//\//\\/}"
+        vv="${vv//&/\\&}"
+        out="$(printf '%s' "$out" | sed "s/{${kk}}/${vv}/g")"
+    done
+
+    printf '%s' "$out"
+}
+
+_run_cmdline_safely() {
+    local cmdline="$1"
+    local -a ARGV=()
+
+    if command -v python3 >/dev/null 2>&1; then
+        mapfile -t ARGV < <(printf '%s' "$cmdline" | python3 - <<'PY'
+import shlex, sys
+data = sys.stdin.read()
+for token in shlex.split(data):
+    print(token)
+PY
+        )
+    fi
+
+    if ((${#ARGV[@]} == 0)); then
+        read -r -a ARGV <<<"$cmdline"
+    fi
+
+    if ((${#ARGV[@]} == 0)); then
+        echo "${RED}Empty command, nothing to execute.${RESET}" >&2
+        return 1
+    fi
+
+    "${ARGV[@]}"
+}
+
 # Run a tool (with simple cache reuse + curl retries)
 run_tool() {
     local category="$1"
     local name="$2"
     local url="$3"
     local runtime="$4"
+    local cmd_template="$5"
+    local inputs_spec="$6"
 
     local dir="$BASE_DIR/$category"
     mkdir -p "$dir"
@@ -236,57 +371,64 @@ run_tool() {
 
     local script_path="$dir/${name// /_}.$ext"
 
+    local using_cached=0
     if [[ -f "$script_path" && -s "$script_path" ]]; then
+        local _ans
         read -rp "Cached copy found. Use cached (u) or re-download (r)? [u/r]: " _ans
         if [[ "$(lower "${_ans:-u}")" != "r" ]]; then
-            echo "${GREEN}Running cached $name...${RESET}"
-            if [[ "$runtime" == "python" ]]; then
-                local py; py=$(pick_python)
-                if [[ -z "$py" ]]; then
-                    echo "${RED}No python interpreter found (tried python3, python).${RESET}"
-                    read -rp "Press enter to continue..."
-                    return
-                fi
-                "$py" "$script_path"
-            else
-                chmod +x "$script_path"
-                "$script_path"
-            fi
-            local rc=$?
-            if (( rc == 0 )); then
-                echo "${GREEN}Tool execution finished.${RESET}"
-            else
-                echo "${RED}Tool exited with code $rc.${RESET}"
-            fi
+            using_cached=1
+        fi
+    fi
+
+    if (( ! using_cached )); then
+        echo "${GREEN}Downloading tool...${RESET}"
+        if ! curl -fsSL --connect-timeout "$CONNECT_TIMEOUT" --max-time "$MAX_TIME" \
+             --retry "$DOWNLOAD_RETRIES" --retry-delay 1 \
+             -o "$script_path" "$url"; then
+            echo "${RED}Download failed!${RESET}"
             read -rp "Press enter to continue..."
             return
         fi
     fi
 
-    echo "${GREEN}Downloading tool...${RESET}"
-    if ! curl -fsSL --connect-timeout "$CONNECT_TIMEOUT" --max-time "$MAX_TIME" \
-         --retry "$DOWNLOAD_RETRIES" --retry-delay 1 \
-         -o "$script_path" "$url"; then
-        echo "${RED}Download failed!${RESET}"
-        read -rp "Press enter to continue..."
-        return
-    fi
-
-    echo "${GREEN}Running $name...${RESET}"
-    if [[ "$runtime" == "python" ]]; then
-        local py; py=$(pick_python)
-        if [[ -z "$py" ]]; then
-            echo "${RED}No python interpreter found (tried python3, python).${RESET}"
-            read -rp "Press enter to continue..."
-            return
-        fi
-        "$py" "$script_path"
+    if (( using_cached )); then
+        echo "${GREEN}Running cached $name...${RESET}"
     else
-        chmod +x "$script_path"
-        "$script_path"
+        echo "${GREEN}Running $name...${RESET}"
     fi
 
-    local rc=$?
+    local rc=0
+    if [[ -n "$cmd_template" ]]; then
+        local built
+        built=$(_prompt_and_build_cmd "$cmd_template" "$inputs_spec")
+        local script_escaped
+        script_escaped=$(printf '%q' "$script_path")
+        built="${built//\{script\}/$script_escaped}"
+        if [[ "$built" == *"{script}"* ]]; then
+            echo "${RED}CMD_TEMPLATE is missing the {script} placeholder.${RESET}"
+            read -rp "Press enter to continue..."
+            return
+        fi
+        chmod +x "$script_path" 2>/dev/null || true
+        _run_cmdline_safely "$built"
+        rc=$?
+    else
+        if [[ "$runtime" == "python" ]]; then
+            local py
+            py=$(pick_python)
+            if [[ -z "$py" ]]; then
+                echo "${RED}No python interpreter found (tried python3, python).${RESET}"
+                read -rp "Press enter to continue..."
+                return
+            fi
+            "$py" "$script_path"
+        else
+            chmod +x "$script_path"
+            "$script_path"
+        fi
+        rc=$?
+    fi
+
     if (( rc == 0 )); then
         echo "${GREEN}Tool execution finished.${RESET}"
     else
@@ -339,20 +481,22 @@ menu_loop() {
                         load_tools "$SELECTED_CATEGORY"
                         CURSOR=0
                     else
-                        IFS='|' read -r category name description url runtime <<< "${MENU_ACTIONS[$CURSOR]}"
+                        IFS='|' read -r category name description url runtime cmd_template inputs_spec <<< "${MENU_ACTIONS[$CURSOR]}"
                         SELECTED_CATEGORY="$category"
                         SELECTED_TOOL_NAME="$name"
                         SELECTED_TOOL_DESC="$description"
                         SELECTED_TOOL_URL="$url"
                         SELECTED_TOOL_RUNTIME="$runtime"
+                        SELECTED_TOOL_CMD_TEMPLATE="${cmd_template:-}"
+                        SELECTED_TOOL_INPUTS_SPEC="${inputs_spec:-}"
                         MODE="tool_detail"
                         load_tool_detail
                         CURSOR=0
                     fi
                 elif [[ "$MODE" == "tool_detail" ]]; then
-                    IFS='|' read -r action category name description url runtime <<< "${MENU_ACTIONS[$CURSOR]}"
+                    IFS='|' read -r action category name description url runtime cmd_template inputs_spec <<< "${MENU_ACTIONS[$CURSOR]}"
                     if [[ "$action" == "run" ]]; then
-                        run_tool "$category" "$name" "$url" "$runtime"
+                        run_tool "$category" "$name" "$url" "$runtime" "${cmd_template:-}" "${inputs_spec:-}"
                         load_tool_detail
                         CURSOR=0
                     elif [[ "$action" == "back" ]]; then
