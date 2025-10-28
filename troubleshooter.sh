@@ -267,8 +267,8 @@ pick_python() {
 }
 
 _prompt_and_build_cmd() {
-    local tmpl="$1" inputs="$2"
-    local -a map_keys=() map_vals=()
+    local tmpl="$1" inputs="$2" script_path="$3"
+    local -a map_keys=() map_vals_raw=() map_is_blank=()
     local -a pairs=()
     local raw_pair
 
@@ -284,16 +284,34 @@ _prompt_and_build_cmd() {
         value_spec=$(echo "$value_spec" | sed 's/^[ \t]*//;s/[ \t]*$//')
         [[ -z "$key" ]] && continue
 
-        local answer=""
+        local answer="" optional=0 default_value=""
         if [[ "$value_spec" == \?* ]]; then
-            local label="${value_spec#\?}"
-            while :; do
-                read -rp "${label}: " answer
-                if [[ -n "${answer//[[:space:]]/}" ]]; then
-                    break
+            local remainder="${value_spec#\?}"
+            if [[ "$remainder" == *"|"* ]]; then
+                local prompt_label="${remainder%%|*}"
+                default_value="${remainder#*|}"
+                optional=1
+                [[ -z "$prompt_label" ]] && prompt_label="$key"
+                read -rp "${prompt_label}: " answer
+                [[ -z "$answer" ]] && answer="$default_value"
+            else
+                local prompt_label="$remainder"
+                if [[ -z "$prompt_label" ]]; then
+                    prompt_label="$key"
+                    optional=1
                 fi
-                echo "Input required."
-            done
+                while :; do
+                    read -rp "${prompt_label}: " answer
+                    if [[ -n "${answer//[[:space:]]/}" ]]; then
+                        break
+                    fi
+                    if (( optional )); then
+                        answer=""
+                        break
+                    fi
+                    echo "Input required."
+                done
+            fi
         else
             local -a opts=()
             local IFS='/'
@@ -305,19 +323,107 @@ _prompt_and_build_cmd() {
         fi
 
         map_keys+=("$key")
-        local escaped
-        escaped=$(printf '%q' "$answer")
-        map_vals+=("$escaped")
+        map_vals_raw+=("$answer")
+        if [[ -z "$answer" ]]; then
+            map_is_blank+=("1")
+        else
+            map_is_blank+=("0")
+        fi
     done
 
-    local out="$tmpl"
-    for i in "${!map_keys[@]}"; do
-        local kk="${map_keys[$i]}"
-        local vv="${map_vals[$i]}"
-        vv="${vv//\\/\\\\}"
-        vv="${vv//\//\\/}"
-        vv="${vv//&/\\&}"
-        out="$(printf '%s' "$out" | sed "s/{${kk}}/${vv}/g")"
+    map_keys+=("script")
+    map_vals_raw+=("$script_path")
+    map_is_blank+=("0")
+
+    if [[ "$tmpl" != *"{script}"* ]]; then
+        echo "${RED}CMD_TEMPLATE is missing the {script} placeholder.${RESET}" >&2
+        return 1
+    fi
+
+    local -a tokens=()
+    if command -v python3 >/dev/null 2>&1; then
+        while IFS= read -r line; do
+            tokens+=("$line")
+        done < <(printf '%s' "$tmpl" | python3 - <<'PY'
+import shlex, sys
+data = sys.stdin.read()
+for token in shlex.split(data):
+    print(token)
+PY
+        )
+    else
+        read -r -a tokens <<<"$tmpl"
+    fi
+
+    local -a final_tokens=()
+    local idx token
+    for token in "${tokens[@]}"; do
+        local original="$token"
+        local new_token="$token"
+        local had_placeholder=0
+        local blank_triggered=0
+
+        for idx in "${!map_keys[@]}"; do
+            local kk="${map_keys[$idx]}"
+            local vv="${map_vals_raw[$idx]}"
+            if [[ "$new_token" == *"{${kk}}"* ]]; then
+                had_placeholder=1
+                if [[ "${map_is_blank[$idx]}" == "1" ]]; then
+                    blank_triggered=1
+                fi
+                new_token="${new_token//\{${kk}\}/$vv}"
+            fi
+        done
+
+        if (( had_placeholder )); then
+            local trimmed="${new_token//[[:space:]]/}"
+            if (( blank_triggered )); then
+                local drop_token=0
+                if [[ -z "$trimmed" ]]; then
+                    drop_token=1
+                elif [[ "$new_token" == *= ]]; then
+                    drop_token=1
+                elif [[ "$new_token" =~ ^--?[A-Za-z0-9_-]+=?$ ]]; then
+                    drop_token=1
+                fi
+                if (( drop_token )); then
+                    if [[ "$original" =~ ^\{[A-Za-z0-9_]+\}$ && ${#final_tokens[@]} -gt 0 ]]; then
+                        local prev_index=$(( ${#final_tokens[@]} - 1 ))
+                        local prev_token="${final_tokens[$prev_index]}"
+                        if [[ "$prev_token" == -* || "$prev_token" == *= || "$prev_token" == --* ]]; then
+                            unset 'final_tokens[$prev_index]'
+                            final_tokens=("${final_tokens[@]}")
+                        fi
+                    fi
+                    continue
+                fi
+            fi
+        fi
+
+        final_tokens+=("$new_token")
+    done
+
+    local unresolved=0
+    for token in "${final_tokens[@]}"; do
+        if [[ "$token" == *"{"*"}"* ]]; then
+            unresolved=1
+            break
+        fi
+    done
+    if (( unresolved )); then
+        echo "${RED}CMD_TEMPLATE has unresolved placeholders after substitution.${RESET}" >&2
+        return 1
+    fi
+
+    local out=""
+    for token in "${final_tokens[@]}"; do
+        local escaped
+        escaped=$(printf '%q' "$token")
+        if [[ -z "$out" ]]; then
+            out="$escaped"
+        else
+            out+=" $escaped"
+        fi
     done
 
     printf '%s' "$out"
@@ -400,12 +506,7 @@ run_tool() {
     local rc=0
     if [[ -n "$cmd_template" ]]; then
         local built
-        built=$(_prompt_and_build_cmd "$cmd_template" "$inputs_spec")
-        local script_escaped
-        script_escaped=$(printf '%q' "$script_path")
-        built="${built//\{script\}/$script_escaped}"
-        if [[ "$built" == *"{script}"* ]]; then
-            echo "${RED}CMD_TEMPLATE is missing the {script} placeholder.${RESET}"
+        if ! built=$(_prompt_and_build_cmd "$cmd_template" "$inputs_spec" "$script_path"); then
             read -rp "Press enter to continue..."
             return
         fi

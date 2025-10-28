@@ -76,6 +76,10 @@ Blank lines and comment lines (starting with `#`) are skipped automatically. Whe
   - `key=value1/value2/...` shows a choice prompt, with the first option used when you press Enter.
   - `key=?Label text` shows a required free-text prompt labelled with `Label text` and loops until a non-blank answer is
     provided.
+  - `key=?Label text|default` shows a free-text prompt that accepts a default when you press Enter. The default may be empty;
+    omitting the label entirely (`key=?`) uses the key name and treats the field as optional.
+- When an optional prompt produces an empty value, the launcher removes the placeholder token (and any adjacent option flag)
+  before execution so optional arguments disappear from the final command line.
 - All collected answers are shell-escaped and substituted into the template before execution. Tokenisation is handled with
   `python3 -c 'import shlex'` when available and falls back to a simple whitespace split otherwise; no `eval` is ever used.
 
@@ -84,6 +88,7 @@ Example entries:
 ```
 Connectors|Collector Assignments|View/Delete by connector id|https://gist.github.com/.../collector_tool.sh|{script} --action {action} --id {id}|action=view/delete;id=?Connector ID
 Networking|Firewall Check|Run port test|https://gist.github.com/.../fw_check.sh|{script} --host {host} --ports {ports}|host=?Target host;ports=?Comma-separated ports
+Diagnostics|Echo Demo (optional note)|Debug substitution|https://gist.github.com/.../echo_demo.sh|{script} --name {name} --note {note}|name=?Your name;note=?Note text|
 ```
 
 Rows that only specify the first four columns continue to work without any prompts.
