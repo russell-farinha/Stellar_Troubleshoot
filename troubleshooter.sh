@@ -222,6 +222,8 @@ run_tool() {
     local name="$2"
     local url="$3"
     local runtime="$4"
+    shift 4
+    local extra_args=("$@")
 
     local dir="$BASE_DIR/$category"
     mkdir -p "$dir"
@@ -247,10 +249,10 @@ run_tool() {
                     read -rp "Press enter to continue..."
                     return
                 fi
-                "$py" "$script_path"
+                "$py" "$script_path" "${extra_args[@]}"
             else
                 chmod +x "$script_path"
-                "$script_path"
+                "$script_path" "${extra_args[@]}"
             fi
             local rc=$?
             if (( rc == 0 )); then
@@ -280,10 +282,10 @@ run_tool() {
             read -rp "Press enter to continue..."
             return
         fi
-        "$py" "$script_path"
+        "$py" "$script_path" "${extra_args[@]}"
     else
         chmod +x "$script_path"
-        "$script_path"
+        "$script_path" "${extra_args[@]}"
     fi
 
     local rc=$?
@@ -352,7 +354,20 @@ menu_loop() {
                 elif [[ "$MODE" == "tool_detail" ]]; then
                     IFS='|' read -r action category name description url runtime <<< "${MENU_ACTIONS[$CURSOR]}"
                     if [[ "$action" == "run" ]]; then
-                        run_tool "$category" "$name" "$url" "$runtime"
+                        local args_line
+                        read -rp "Arguments (optional): " args_line
+                        local args=()
+                        if [[ -n "$args_line" ]]; then
+                            local had_noglob=0
+                            [[ $- == *f* ]] && had_noglob=1
+                            set -f
+                            # shellcheck disable=SC2086
+                            eval "set -- $args_line"
+                            args=("$@")
+                            (( had_noglob == 0 )) && set +f
+                            set --
+                        fi
+                        run_tool "$category" "$name" "$url" "$runtime" "${args[@]}"
                         load_tool_detail
                         CURSOR=0
                     elif [[ "$action" == "back" ]]; then
