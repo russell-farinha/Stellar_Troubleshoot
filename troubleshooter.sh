@@ -356,62 +356,63 @@ PY
     fi
 
     local -a final_tokens=()
-    local idx token
     for token in "${tokens[@]}"; do
         local original="$token"
-        local new_token="$token"
-        local had_placeholder=0
+        local substituted="$token"
         local blank_triggered=0
 
-        for idx in "${!map_keys[@]}"; do
-            local kk="${map_keys[$idx]}"
-            local vv="${map_vals_raw[$idx]}"
-            if [[ "$new_token" == *"{${kk}}"* ]]; then
-                had_placeholder=1
-                if [[ "${map_is_blank[$idx]}" == "1" ]]; then
-                    blank_triggered=1
+        while [[ "$substituted" =~ \{([A-Za-z0-9_]+)\} ]]; do
+            local placeholder="${BASH_REMATCH[1]}"
+            local idx found=0
+            for idx in "${!map_keys[@]}"; do
+                if [[ "${map_keys[$idx]}" == "$placeholder" ]]; then
+                    substituted="${substituted//\{${placeholder}\}/${map_vals_raw[$idx]}}"
+                    if [[ "${map_is_blank[$idx]}" == "1" ]]; then
+                        blank_triggered=1
+                    fi
+                    found=1
+                    break
                 fi
-                new_token="${new_token//\{${kk}\}/$vv}"
+            done
+            if (( ! found )); then
+                echo "${RED}CMD_TEMPLATE references unknown placeholder {${placeholder}}.${RESET}" >&2
+                return 1
             fi
         done
 
-        if (( had_placeholder )); then
-            local trimmed="${new_token//[[:space:]]/}"
-            if (( blank_triggered )); then
-                local drop_token=0
-                if [[ -z "$trimmed" ]]; then
-                    drop_token=1
-                elif [[ "$new_token" == *= ]]; then
-                    drop_token=1
-                elif [[ "$new_token" =~ ^--?[A-Za-z0-9_-]+=?$ ]]; then
-                    drop_token=1
-                fi
-                if (( drop_token )); then
-                    if [[ "$original" =~ ^\{[A-Za-z0-9_]+\}$ && ${#final_tokens[@]} -gt 0 ]]; then
+        if [[ "$substituted" == *\{* || "$substituted" == *\}* ]]; then
+            echo "${RED}CMD_TEMPLATE has unresolved placeholders after substitution.${RESET}" >&2
+            return 1
+        fi
+
+        if (( blank_triggered )); then
+            local stripped="${substituted//[[:space:]]/}"
+            if [[ -z "$stripped" || "$substituted" == *= || "$substituted" =~ ^--?[A-Za-z0-9][A-Za-z0-9._-]*=?$ ]]; then
+                if ((${#final_tokens[@]} > 0)); then
+                    local stripped_original="$original"
+                    if [[ "$stripped_original" == "\""*"\"" ]]; then
+                        stripped_original="${stripped_original:1:${#stripped_original}-2}"
+                    elif [[ "$stripped_original" == "'"*"'" ]]; then
+                        stripped_original="${stripped_original:1:${#stripped_original}-2}"
+                    fi
+                    if [[ "$stripped_original" =~ ^\{[A-Za-z0-9_]+\}$ ]]; then
                         local prev_index=$(( ${#final_tokens[@]} - 1 ))
                         local prev_token="${final_tokens[$prev_index]}"
-                        if [[ "$prev_token" == -* || "$prev_token" == *= || "$prev_token" == --* ]]; then
+                        if [[ "$prev_token" == -* || "$prev_token" == *= ]]; then
                             unset 'final_tokens[$prev_index]'
                             final_tokens=("${final_tokens[@]}")
                         fi
                     fi
-                    continue
                 fi
+                continue
             fi
         fi
 
-        final_tokens+=("$new_token")
+        final_tokens+=("$substituted")
     done
 
-    local unresolved=0
-    for token in "${final_tokens[@]}"; do
-        if [[ "$token" == *"{"*"}"* ]]; then
-            unresolved=1
-            break
-        fi
-    done
-    if (( unresolved )); then
-        echo "${RED}CMD_TEMPLATE has unresolved placeholders after substitution.${RESET}" >&2
+    if ((${#final_tokens[@]} == 0)); then
+        echo "${RED}CMD_TEMPLATE resolved to an empty command.${RESET}" >&2
         return 1
     fi
 
