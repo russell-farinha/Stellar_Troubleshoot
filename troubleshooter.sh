@@ -8,7 +8,7 @@
 CONFIG_FILE="./tools.conf"
 BASE_DIR="./tools"
 APP_NAME="Project Orion"
-VERSION="1.0.0"
+VERSION="1.1.0"
 
 # Hardcoded settings (no ENV needed)
 PAGE_SIZE=5                  # Tools per page

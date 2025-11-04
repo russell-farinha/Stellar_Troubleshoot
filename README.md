@@ -1,82 +1,72 @@
-# Project Orion
+# Project Orion 1.1.0
 
-Project Orion is a Bash script that provides an interactive menu for running remote diagnostics and helper utilities defined in
-`tools.conf`. The first time you run a tool it is downloaded into `./tools/`, and subsequent runs reuse the cached copy or re-
-fetch it on demand. The script targets stock Linux distributions and relies only on standard command-line tools that ship with
-bash environments.
+Project Orion is a self-contained Bash launcher that presents an interactive, keyboard-driven menu for running remote diagnostic
+and helper utilities. Tools are defined in `tools.conf`, grouped by category, and fetched on demand into a local cache. Reusing
+the cached copy avoids repeat downloads, while a built-in refresh option lets you grab updated scripts when needed.
 
-## Repository layout
-- `troubleshooter.sh` – interactive launcher and downloader for Project Orion.
-- `tools.conf` – pipe-delimited catalogue of tools grouped by category.
-- `tests/run_tests.sh` – historical shell test harness (see [Known limitations](#known-limitations)).
+## Highlights
+- **Dependency-light:** requires only `bash`, `curl`, and standard POSIX utilities already present on common Linux distributions.
+- **Dynamic catalogue:** reads categories, descriptions, and download URLs directly from `tools.conf` at runtime.
+- **Smart runtime detection:** honours an explicit runtime column or infers Bash vs. Python from the tool's file extension.
+- **Search & pagination:** filter by keyword inside a category and browse large lists with next/previous page shortcuts.
+- **Safe caching:** downloads land in `./tools/<Category>/<Tool>` with spaces replaced by underscores; cleanup commands remove
+  cached files in one step.
 
-## Requirements
-- `bash`
-- `curl`
-- Standard Unix text utilities (`awk`, `sed`, `sort`, `tr`)
-- Optional: `python3` or `python` when executing Python-based tools
+## Repository contents
+- `troubleshooter.sh` – the interactive launcher script.
+- `tools.conf` – pipe-delimited configuration that lists available tools.
 
-## Running the menu
+## Getting started
 ```bash
 chmod +x troubleshooter.sh
 ./troubleshooter.sh
 ```
 
-The script immediately opens a full-screen menu. Use the keyboard controls below to explore categories, filter tools, and execute
-entries.
+By default the script opens the full-screen menu immediately. Use the keyboard shortcuts below to drive the interface:
 
-### Keyboard controls
-- `↑` / `↓` – move the highlighted row
-- `Enter` – select the highlighted entry
-- `b` – return to the previous menu
-- `q` – quit without removing cached tools
-- `r` – remove cached downloads (`./tools/*`) and exit
-- `/` – search tool names and descriptions in the current category
-- `n` / `p` – flip to the next or previous results page when pagination is available
-- `Ctrl+C` – exit gracefully; cached downloads are removed before quitting
+| Key | Action |
+| --- | --- |
+| `↑` / `↓` | Move the selection cursor |
+| `Enter` | Activate the highlighted row |
+| `b` | Back up to the previous view |
+| `n` / `p` | Flip between paginated result pages |
+| `/` | Search within the current category |
+| `q` | Quit without touching cached downloads |
+| `r` | Remove cached downloads and exit |
+| `Ctrl+C` | Exit gracefully (also clears cached downloads) |
 
-Tool detail pages show the stored description and the runtime that will be used (either Bash or Python).
+Tool detail screens display the description pulled from `tools.conf` plus the runtime the launcher will use when executing the
+script.
 
-## Versioning and CLI flags
-Project Orion now embeds a semantic version string that is surfaced through the launcher. Use the following commands to inspect
-metadata or obtain help without opening the interactive UI:
+## Command-line flags
+Project Orion exposes its metadata without launching the UI:
 
 ```bash
-./troubleshooter.sh --version
-./troubleshooter.sh --help
+./troubleshooter.sh --help     # Usage information
+./troubleshooter.sh --version  # Prints "Project Orion 1.1.0"
 ```
 
-The version constant is defined near the top of `troubleshooter.sh` so downstream consumers can source the script and reuse the
-value if needed.
-
-## Tool catalogue format
-Each non-comment line in `tools.conf` must contain the following pipe-separated fields:
+## Configuring `tools.conf`
+Each non-comment, non-empty line uses the following schema:
 
 ```
-CATEGORY|NAME|DESCRIPTION|URL[|RUNTIME|EXTRA...]
+CATEGORY|TOOL NAME|DESCRIPTION|DOWNLOAD_URL[|RUNTIME|EXTRA...]
 ```
 
-Only the first four columns are required. A fifth column can explicitly set the runtime (`bash` or `python`). Any additional
-columns (for example a checksum) are ignored by the current implementation. When the runtime column is omitted, the launcher
-infers it from the URL extension (`.py` → Python, `.sh` → Bash) and otherwise defaults to Bash.
+- `CATEGORY`, `TOOL NAME`, `DESCRIPTION`, and `DOWNLOAD_URL` are required.
+- `RUNTIME` is optional. When set to `bash` or `python` it overrides automatic detection.
+- Additional columns are ignored by the current implementation, allowing you to stash checksums or notes for future use.
 
-Blank lines and comment lines (starting with `#`) are skipped automatically. When running a tool, the script caches it inside
-`./tools/<Category>/<Name>.sh` or `.py`, with spaces in the name replaced by underscores.
+Lines beginning with `#` are treated as comments and skipped. When a tool is executed it is saved to
+`./tools/<Category>/<Tool_Name>.<ext>`; the extension is derived from the original download URL.
 
-## Downloads and execution
-- Downloads use `curl` with a 5-second connect timeout, 60-second overall timeout, and up to three retries on transient failures.
-- Cached scripts are reused by default. When a cached copy exists, the launcher prompts you to press `r` to fetch a fresh copy or
-accept the cached version.
-- Bash tools are marked executable and run directly. Python tools prefer `python3`, falling back to `python` if needed. If neither
-interpreter is available, execution is cancelled.
+## Download behaviour
+- `curl` is used for transfers with a 5-second connect timeout, 60-second total timeout, and three retry attempts.
+- Python tools are executed with `python3` when available, otherwise the launcher falls back to `python`. If neither interpreter
+  is present the run is aborted with a warning.
+- Re-running a tool that is already cached prompts you to accept the existing copy or press `r` to refresh it.
 
-## Known limitations
-- `tests/run_tests.sh` predates the current script structure. Because `troubleshooter.sh` launches the menu as soon as it is
-sourced, the test harness cannot execute successfully without manual refactoring. Treat the tests as historical reference
-material.
-- Extra metadata columns in `tools.conf` (such as hashes) are ignored during download; there is no checksum verification.
-
-## Tips for local customization
-- Adjust the `PAGE_SIZE`, timeout, and retry settings near the top of `troubleshooter.sh` to fit your environment.
-- Add new tools by editing `tools.conf`. Keep URLs commit-pinned when possible so cached scripts stay reproducible.
-- To clear the cache without opening the UI, delete the `./tools` directory.
+## Customising the experience
+Tweak the constants near the top of `troubleshooter.sh` to adjust pagination size, download timeouts, and retry counts. Removing
+the `./tools` directory (or pressing `r` inside the UI) clears the cache. To add new diagnostics, append entries to `tools.conf`
+and commit them alongside the script so the catalogue stays reproducible.
