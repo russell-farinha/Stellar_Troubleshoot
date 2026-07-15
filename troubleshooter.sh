@@ -8,7 +8,7 @@
 CONFIG_FILE="./tools.conf"
 BASE_DIR="./tools"
 APP_NAME="Project Orion"
-VERSION="1.1.0"
+VERSION="1.2.0"
 
 # Hardcoded settings (no ENV needed)
 PAGE_SIZE=5                  # Tools per page
@@ -56,6 +56,25 @@ fi
 
 lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
 
+# --- Source handling ---------------------------------------------------------
+# The 4th column of tools.conf is a SOURCE: http(s):// URLs are downloaded and
+# cached under ./tools/; anything else is a local path, resolved relative to
+# the current working directory and executed in place.
+is_remote_source() {
+    case "$1" in
+        http://*|https://*) return 0;;
+        *) return 1;;
+    esac
+}
+
+# Local paths must stay inside the working directory: no absolute paths, no "..".
+validate_local_source() {
+    case "$1" in
+        /*|*..*) return 1;;
+    esac
+    return 0
+}
+
 # --- Runtime detection -------------------------------------------------------
 # Priority:
 # 1) If a 5th column is present and equals "python" or "bash", use it.
@@ -88,6 +107,11 @@ draw_menu() {
         echo
         echo "${BOLD}Description:${RESET} $SELECTED_TOOL_DESC"
         echo "Runtime: ${SELECTED_TOOL_RUNTIME}"
+        if is_remote_source "$SELECTED_TOOL_URL"; then
+            echo "Source: remote (${SELECTED_TOOL_URL})"
+        else
+            echo "Source: local (${SELECTED_TOOL_URL})"
+        fi
         echo
     fi
 
@@ -224,6 +248,42 @@ run_tool() {
     local runtime="$4"
     shift 4
     local extra_args=("$@")
+
+    # Local source: no download, no cache — validate and run in place.
+    if ! is_remote_source "$url"; then
+        if ! validate_local_source "$url"; then
+            echo "${RED}Invalid local script path: $url${RESET}"
+            read -rp "Press enter to continue..."
+            return
+        fi
+        local local_path="./${url#./}"
+        if [[ ! -f "$local_path" || ! -s "$local_path" ]]; then
+            echo "${RED}Local script missing or empty: $local_path${RESET}"
+            read -rp "Press enter to continue..."
+            return
+        fi
+        echo "${GREEN}Running $name...${RESET}"
+        if [[ "$runtime" == "python" ]]; then
+            local py; py=$(pick_python)
+            if [[ -z "$py" ]]; then
+                echo "${RED}No python interpreter found (tried python3, python).${RESET}"
+                read -rp "Press enter to continue..."
+                return
+            fi
+            "$py" "$local_path" "${extra_args[@]}"
+        else
+            chmod +x "$local_path"
+            "$local_path" "${extra_args[@]}"
+        fi
+        local rc=$?
+        if (( rc == 0 )); then
+            echo "${GREEN}Tool execution finished.${RESET}"
+        else
+            echo "${RED}Tool exited with code $rc.${RESET}"
+        fi
+        read -rp "Press enter to continue..."
+        return
+    fi
 
     local dir="$BASE_DIR/$category"
     mkdir -p "$dir"
