@@ -12,8 +12,8 @@ repeat downloads, while a built-in refresh option lets you grab updated scripts 
 - **Dynamic catalogue:** reads categories, descriptions, and tool sources directly from `tools.conf` at runtime.
 - **Smart runtime detection:** honours an explicit runtime column or infers Bash vs. Python from the tool's file extension.
 - **Search & pagination:** filter by keyword inside a category and browse large lists with next/previous page shortcuts.
-- **Safe caching:** downloads land in `./tools/<Category>/<Tool>` with spaces replaced by underscores; cleanup commands remove
-  cached files in one step.
+- **Safe caching:** downloads land in `./tools/<Category>/<Tool>` with spaces replaced by underscores; no UI action ever
+  deletes files — refresh a cached tool via the re-download prompt when running it.
 
 ## Repository contents
 - `troubleshooter.sh` – the interactive launcher script.
@@ -35,9 +35,10 @@ By default the script opens the full-screen menu immediately. Use the keyboard s
 | `b` | Back up to the previous view |
 | `n` / `p` | Flip between paginated result pages |
 | `/` | Search within the current category |
-| `q` | Quit without touching cached downloads |
-| `r` | Remove cached downloads and exit |
-| `Ctrl+C` | Exit gracefully (also clears cached downloads) |
+| `q` | Quit |
+| `Ctrl+C` | Exit gracefully |
+
+Neither exit removes any files.
 
 Tool detail screens display the description pulled from `tools.conf`, the runtime the launcher will use when executing the
 script, and the source — `Source: local (<path>)` or `Source: remote (<url>)`.
@@ -71,7 +72,6 @@ Lines beginning with `#` are treated as comments and skipped. When a remote tool
 ### Local paths
 - Local tools run in place from their configured path — no download, no copy into `./tools/`, and no cached-copy prompt.
 - If the file is missing or empty, the launcher shows an error and returns to the menu; nothing is executed.
-- Cache cleanup (`r` key or `Ctrl+C`) only removes `./tools/*` and never touches `scripts/` or `tools.conf`.
 
 ### Remote URLs
 - `curl` is used for transfers with a 5-second connect timeout, 60-second total timeout, and three retry attempts.
@@ -81,6 +81,7 @@ For both source types, Python tools are executed with `python3` when available, 
 If neither interpreter is present the run is aborted with a warning.
 
 ## Customising the experience
-Tweak the constants near the top of `troubleshooter.sh` to adjust pagination size, download timeouts, and retry counts. Removing
-the `./tools` directory (or pressing `r` inside the UI) clears the cache. To add new diagnostics, append entries to `tools.conf`
-and commit them alongside the script so the catalogue stays reproducible.
+Tweak the constants near the top of `troubleshooter.sh` to adjust pagination size, download timeouts, and retry counts. The UI
+never deletes files; to clear the download cache, remove the `./tools` directory manually from the shell, or use the
+re-download prompt to refresh an individual cached tool. To add new diagnostics, append entries to `tools.conf` and commit them
+alongside the script so the catalogue stays reproducible.

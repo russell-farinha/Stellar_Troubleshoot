@@ -13,7 +13,7 @@ The single-file architecture is a **deliberate choice**, not tech debt. Do not r
 | `troubleshooter.sh` | The interactive launcher (single file, Bash 4+) |
 | `tools.conf` | Pipe-delimited tool catalog: `CATEGORY\|NAME\|DESCRIPTION\|SOURCE[\|RUNTIME\|EXTRA]` |
 | `scripts/` | Locally hosted (vendored) tool scripts |
-| `tools/` | Runtime cache for downloaded tools — disposable, cleared by `r` key and Ctrl-C |
+| `tools/` | Runtime cache for downloaded (remote-URL) tools — disposable; never deleted by the UI, remove manually if needed |
 | `releases/` | Tarball releases |
 
 ## Hard constraints
@@ -21,7 +21,7 @@ The single-file architecture is a **deliberate choice**, not tech debt. Do not r
 1. **No shell escape, ever.** Orion runs in customer environments behind a restricted CLI shim. No feature may let a user run arbitrary shell commands from the UI. Any tool that invokes `less` must run with `LESSSECURE=1`.
 2. **Dependency-free.** Bash 4+, `curl`, `awk`, `sed`, standard POSIX tools only. Optional `python3`/`python` for Python tools. No new dependencies.
 3. **Doc-sync rule.** Every behavior-changing commit updates `README.md` **and** this `CLAUDE.md` in the same commit.
-4. **Cleanup safety.** The `r` key and the Ctrl-C trap remove only `./tools/*` (the download cache). They must never touch `scripts/`, `tools.conf`, or anything else.
+4. **No file deletion from the UI.** No UI action may delete files — there is no cleanup key, and the quit paths (`q`, Ctrl-C) must not remove anything. Refreshing a cached remote tool happens only through the per-tool re-download prompt, which overwrites that tool's own cache file.
 5. **Version bumps.** Any user-visible behavior change bumps `VERSION` in `troubleshooter.sh` and the version in `README.md`.
 
 ## Development workflow (multi-instance, iterative)
@@ -49,5 +49,4 @@ Before shipping any change to `troubleshooter.sh`, verify at minimum:
 - A local-path tool runs without any download or cache prompt.
 - A remote-URL tool still downloads, caches, and offers the cached/re-download prompt.
 - A tool that requires arguments receives them correctly.
-- `r` and Ctrl-C clear only `./tools/`; `scripts/` is untouched afterward.
-- `q` exits without clearing the cache.
+- `q` and Ctrl-C exit without deleting anything: `./tools/` and `scripts/` are untouched afterward.

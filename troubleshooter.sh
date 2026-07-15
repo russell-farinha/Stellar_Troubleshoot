@@ -41,8 +41,8 @@ CURRENT_PAGE=0
 TOTAL_PAGES=0
 VISIBLE_COUNT=0
 
-# Ctrl-C exits cleanly with cleanup
-trap 'echo; echo "${YELLOW}Exiting (Ctrl-C)...${RESET}"; rm -rf -- "$BASE_DIR"/* 2>/dev/null || true; clear; exit 130' INT
+# Ctrl-C exits cleanly (never deletes anything)
+trap 'echo; echo "${YELLOW}Exiting (Ctrl-C)...${RESET}"; clear; exit 130' INT
 
 # Tiny-timeout feature detection (some shells reject fractional -t)
 supports_subsecond_read() {
@@ -126,14 +126,14 @@ draw_menu() {
     echo
     case "$MODE" in
         "categories")
-            echo "${CYAN}↑/↓: Move  Enter: Select  q: Quit  r: Cleanup+Quit${RESET}"
+            echo "${CYAN}↑/↓: Move  Enter: Select  q: Quit${RESET}"
             ;;
         "tools")
             # n/p first, then search
-            echo "${CYAN}↑/↓: Move  Enter: Select  b: Back  q: Quit  r: Cleanup+Quit  n/p: Next/Prev page  /: Search${RESET}"
+            echo "${CYAN}↑/↓: Move  Enter: Select  b: Back  q: Quit  n/p: Next/Prev page  /: Search${RESET}"
             ;;
         "tool_detail")
-            echo "${CYAN}↑/↓: Move  Enter: Select  b: Back  q: Quit  r: Cleanup+Quit${RESET}"
+            echo "${CYAN}↑/↓: Move  Enter: Select  b: Back  q: Quit${RESET}"
             ;;
     esac
 }
@@ -449,13 +449,6 @@ menu_loop() {
                 fi
                 ;;
             "q"|"Q")
-                # Quit WITHOUT cleanup
-                exit 0
-                ;;
-            "r"|"R")
-                # Cleanup and quit
-                rm -rf -- "$BASE_DIR"/* 2>/dev/null || true
-                clear
                 exit 0
                 ;;
             "/")
