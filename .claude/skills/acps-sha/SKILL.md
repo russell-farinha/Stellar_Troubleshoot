@@ -12,7 +12,7 @@ Once a change to Project Orion is merged to `main`, Russell delivers **two files
 1. `orion-YYYY_MM_DD_HH_MM.tar.gz` — project files at the **archive root** (no wrapper directory)
 2. `orion-YYYY_MM_DD_HH_MM.tar.gz.sha1` — `shasum -a 1` output with the **bare filename**, so Alex can verify with `shasum -c`
 
-Both live in the repo under `releases/orion-<stamp>/` (see existing releases for precedent). The deliverable is NOT a git commit SHA.
+Both land in the local `releases/orion-<stamp>/` directory — which is **gitignored**, so releases are recorded via local `v<stamp>` git tags, not commits. The deliverable is NOT a git commit SHA.
 
 ## Steps
 
@@ -57,7 +57,11 @@ Both live in the repo under `releases/orion-<stamp>/` (see existing releases for
    > Verify with: shasum -c orion-<stamp>.tar.gz.sha1
    > (<one-line summary of what's in this delivery>)
 
-6. Commit the new `releases/orion-<stamp>/` directory to the repo so the release history stays reproducible (prior releases are checked in).
+6. `releases/` is **gitignored** — do NOT commit the release artifacts. Instead, record what was shipped with a local date-stamp tag, matching prior deliveries (`v2025_10_15_09_00`, `v2025_11_04_09_00` are local-only tags):
+
+   ```bash
+   git tag "v$STAMP" main
+   ```
 
 ## Guardrails
 
