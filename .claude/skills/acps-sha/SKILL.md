@@ -30,6 +30,7 @@ Both land in the local `releases/orion-<stamp>/` directory — which is **gitign
    STAMP=$(date +%Y_%m_%d_%H_%M)
    mkdir -p "releases/orion-$STAMP"
    tar -czf "releases/orion-$STAMP/orion-$STAMP.tar.gz" --uid 0 --gid 0 \
+       --exclude '.DS_Store' --exclude '__pycache__' \
        troubleshooter.sh tools.conf README.md scripts
    ```
 
