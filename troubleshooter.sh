@@ -16,7 +16,7 @@ VERSION="1.3.0"
 PAGE_SIZE=5                  # Tools per page
 HEADER_SCAN_LINES=40         # Header must sit within the first N lines
 TEMP_CATEGORY="Temporary"
-US=$'\x1f'                   # Internal field separator (cannot appear in header values)
+US=$'\x1f'                   # Internal field separator; header values containing it are rejected (regular tier) or stripped (temp tier)
 ALL_FILTER="${US}all"        # Sentinel for the "All tools" category filter
 
 # Colors (graceful fallback if tput/TERM unsupported)
@@ -63,11 +63,22 @@ lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
 # --- Source handling ---------------------------------------------------------
 # Tools are local scripts under ./scripts, resolved relative to the current
 # working directory and executed in place. Paths must stay inside the working
-# directory: no absolute paths, no "..".
+# directory: no absolute paths, no ".." path component, no symlinks (checked on
+# the file and every parent component). Names such as "a..b.sh" are fine.
 validate_local_source() {
-    case "$1" in
-        /*|*..*) return 1;;
+    local p="$1" comp acc="" rest
+    case "$p" in
+        /*) return 1;;
     esac
+    rest="$p"
+    while [[ -n "$rest" ]]; do
+        comp="${rest%%/*}"
+        if [[ "$rest" == */* ]]; then rest="${rest#*/}"; else rest=""; fi
+        [[ -z "$comp" || "$comp" == "." ]] && continue
+        [[ "$comp" == ".." ]] && return 1
+        acc="${acc:+$acc/}$comp"
+        [[ -L "$acc" ]] && return 1
+    done
     return 0
 }
 
@@ -83,12 +94,13 @@ validate_local_source() {
 #   # runtime: bash|python (optional; inferred from extension)
 #   # orion:end
 # Emits one line, fields separated by US (0x1f):
-#   state name category runs_on mode args description runtime
+#   state name category runs_on mode args description runtime ctl
+# ctl: 1 if any value contained US itself (it is stripped from the values).
 # state: 0 = no begin marker, 1 = complete header, 2 = begin without end.
 parse_header() {
     awk -v max="$HEADER_SCAN_LINES" '
     function trim(x) { sub(/^[ \t]+/, "", x); sub(/[ \t]+$/, "", x); return x }
-    BEGIN { st = 0 }
+    BEGIN { st = 0; ctl = 0 }
     NR > max { exit }
     {
         line = $0; sub(/\r$/, "", line)
@@ -102,13 +114,14 @@ parse_header() {
             val = substr(line, RLENGTH + 1)
             sub(/^[ \t]*#[ \t]*/, "", key); sub(/[ \t]*:$/, "", key)
             key = tolower(key)
+            if (index(val, "\037") > 0) { ctl = 1; gsub("\037", "", val) }
             if (!(key in v)) v[key] = trim(val)
         }
     }
     END {
         US = "\037"
-        printf "%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s\n", st, US, v["name"], US, v["category"], US, \
-            v["runs_on"], US, v["mode"], US, v["args"], US, v["description"], US, v["runtime"]
+        printf "%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s\n", st, US, v["name"], US, v["category"], US, \
+            v["runs_on"], US, v["mode"], US, v["args"], US, v["description"], US, v["runtime"], US, ctl
     }' "$1"
 }
 
@@ -116,8 +129,13 @@ parse_header() {
 # $1 = path, $2 = 1 if Temporary tier, 0 otherwise
 scan_one() {
     local f="$1" is_temp="$2"
-    local st name cat runs mode args desc rt
-    IFS="$US" read -r st name cat runs mode args desc rt < <(parse_header "$f")
+    local st name cat runs mode args desc rt ctl
+    IFS="$US" read -r st name cat runs mode args desc rt ctl < <(parse_header "$f")
+
+    # CRLF shebang line breaks execution ("bad interpreter")
+    local first="" crlf=0
+    IFS= read -r first < "$f" || true
+    [[ "$first" == *$'\r' ]] && crlf=1
 
     local base="${f##*/}" ext rt_default
     ext="$(lower "${base##*.}")"
@@ -157,6 +175,7 @@ scan_one() {
         else
             msg="no header; defaults used"
         fi
+        [[ "$ctl" == "1" ]] && msg="$msg; reserved control character stripped from header"
         status="TEMP"; listed=1
         name="$f_name"; desc="$f_desc"; runs="$f_runs"; mode="$f_mode"; args="$f_args"; rt="$f_rt"
         cat="$TEMP_CATEGORY"
@@ -166,6 +185,7 @@ scan_one() {
             2) status="ERROR"; msg="orion:begin without orion:end within first ${HEADER_SCAN_LINES} lines (skipped)";;
             *)
                 local probs=()
+                [[ "$ctl" == "1" ]] && probs+=("header contains reserved control character")
                 [[ -z "$name" ]] && probs+=("missing name")
                 [[ -z "$cat" ]] && probs+=("missing category")
                 [[ -z "$runs" ]] && probs+=("missing runs_on")
@@ -178,9 +198,10 @@ scan_one() {
                 (( rt_ok )) || probs+=("invalid runtime '$rt' (use bash or python)")
                 [[ "$(lower "$cat")" == "$(lower "$TEMP_CATEGORY")" ]] && probs+=("category '$TEMP_CATEGORY' is reserved")
                 if (( ${#probs[@]} )); then
-                    local IFS=';'
-                    status="ERROR"; msg="${probs[*]} (skipped)"
-                    msg="${msg//;/; }"
+                    local pr
+                    status="ERROR"; msg=""
+                    for pr in "${probs[@]}"; do msg="${msg:+$msg; }$pr"; done
+                    msg="$msg (skipped)"
                 else
                     status="OK"; msg="$name [$cat]"; listed=1
                     mode="$mode_lc"
@@ -188,6 +209,14 @@ scan_one() {
                 fi
                 ;;
         esac
+    fi
+
+    if (( crlf )); then
+        if [[ "$status" == "OK" ]]; then
+            status="WARN"; msg="CRLF line endings (will fail to run)"
+        else
+            msg="$msg; CRLF line endings (will fail to run)"
+        fi
     fi
 
     SC_FILE+=("$f"); SC_STATUS+=("$status"); SC_MSG+=("$msg"); SC_LISTED+=("$listed"); SC_TEMP+=("$is_temp")
@@ -205,17 +234,62 @@ scan_scripts() {
         dir="$SCRIPTS_DIR"
         (( tier )) && dir="$SCRIPTS_DIR/temp"
         for f in "$dir"/*; do
-            [[ -f "$f" ]] || continue
+            [[ -e "$f" || -L "$f" ]] || continue
             base="${f##*/}"
             case "$base" in
                 _*|.*) continue;;
                 *.sh|*.py) ;;
                 *) continue;;
             esac
+            if [[ -L "$f" ]]; then
+                SC_FILE+=("$f"); SC_STATUS+=("WARN"); SC_MSG+=("symlink ignored"); SC_LISTED+=(0); SC_TEMP+=("$tier")
+                SC_NAME+=(""); SC_CAT+=(""); SC_RUNS+=(""); SC_MODE+=(""); SC_ARGS+=(""); SC_DESC+=(""); SC_RUNTIME+=("")
+                continue
+            fi
+            [[ -f "$f" ]] || continue
             scan_one "$f" "$tier"
         done
     done
+    merge_category_case
     return 0
+}
+
+# Sorted (case-insensitive by name, then original name, then index) list of
+# listed-tool lines "lcname<US>name<US>idx". $1 = optional category filter.
+sorted_tool_lines() {
+    local filter="$1" i
+    local lines=()
+    for i in "${!SC_FILE[@]}"; do
+        [[ "${SC_LISTED[$i]}" == "1" ]] || continue
+        [[ -n "$filter" && "$filter" != "$ALL_FILTER" && "${SC_CAT[$i]}" != "$filter" ]] && continue
+        lines+=("$(lower "${SC_NAME[$i]}")${US}${SC_NAME[$i]}${US}$(printf '%06d' "$i")")
+    done
+    (( ${#lines[@]} )) && printf '%s\n' "${lines[@]}" | LC_ALL=C sort
+}
+
+# Categories that differ only in case merge into one entry, spelled like the
+# first such tool in sorted order; other spellings get a --check WARN.
+merge_category_case() {
+    local canon_lc=() canon_val=() canon_file=()
+    local line idx lc k found
+    while IFS= read -r line; do
+        [[ -z "$line" ]] && continue
+        idx=$((10#${line##*"$US"}))
+        [[ "${SC_TEMP[$idx]}" == "1" ]] && continue
+        lc="$(lower "${SC_CAT[$idx]}")"
+        found=-1
+        for k in "${!canon_lc[@]}"; do
+            [[ "${canon_lc[$k]}" == "$lc" ]] && { found=$k; break; }
+        done
+        if (( found < 0 )); then
+            canon_lc+=("$lc"); canon_val+=("${SC_CAT[$idx]}"); canon_file+=("${SC_FILE[$idx]}")
+        elif [[ "${SC_CAT[$idx]}" != "${canon_val[$found]}" ]]; then
+            local own="${SC_CAT[$idx]}"
+            SC_CAT[$idx]="${canon_val[$found]}"
+            SC_MSG[$idx]="category spelling differs in case: $own vs ${canon_val[$found]} (see ${canon_file[$found]})"
+            [[ "${SC_STATUS[$idx]}" == "OK" ]] && SC_STATUS[$idx]="WARN"
+        fi
+    done < <(sorted_tool_lines "")
 }
 
 # Split an argument line into PARSED_ARGS without eval, expansion or globbing.
@@ -332,7 +406,7 @@ load_categories() {
         if [[ "${SC_TEMP[$i]}" == "1" ]]; then
             have_temp=1
         else
-            cats+=("${SC_CAT[$i]}")
+            cats+=("$(lower "${SC_CAT[$i]}")${US}${SC_CAT[$i]}")
         fi
     done
 
@@ -340,6 +414,7 @@ load_categories() {
     if (( ${#cats[@]} )); then
         while IFS= read -r cat; do
             [[ -z "$cat" ]] && continue
+            cat="${cat#*"$US"}"
             MENU_OPTIONS+=("$cat")
             MENU_ACTIONS+=("$cat")
         done < <(printf '%s\n' "${cats[@]}" | LC_ALL=C sort -u)
@@ -359,28 +434,17 @@ load_tools() {
     MENU_OPTIONS=()
     MENU_ACTIONS=()
 
-    # Lines of "name<US>index" for sorting
-    local tmp_list=() i name_lc desc_lc
-    for i in "${!SC_FILE[@]}"; do
-        [[ "${SC_LISTED[$i]}" == "1" ]] || continue
-        if [[ "$filter_category" == "$ALL_FILTER" || "${SC_CAT[$i]}" == "$filter_category" ]]; then
-            # Search in names and descriptions (case-insensitive)
-            name_lc=$(lower "${SC_NAME[$i]}")
-            desc_lc=$(lower "${SC_DESC[$i]}")
-            if [[ -z "$SEARCH_TERM" || "$name_lc" == *"$SEARCH_TERM"* || "$desc_lc" == *"$SEARCH_TERM"* ]]; then
-                tmp_list+=("${SC_NAME[$i]}${US}$i")
-            fi
+    # Search in names and descriptions (case-insensitive); sort case-insensitively
+    local sorted=() line idx name_lc desc_lc
+    while IFS= read -r line; do
+        [[ -z "$line" ]] && continue
+        idx=$((10#${line##*"$US"}))
+        name_lc=$(lower "${SC_NAME[$idx]}")
+        desc_lc=$(lower "${SC_DESC[$idx]}")
+        if [[ -z "$SEARCH_TERM" || "$name_lc" == *"$SEARCH_TERM"* || "$desc_lc" == *"$SEARCH_TERM"* ]]; then
+            sorted+=("$idx")
         fi
-    done
-
-    # Sort alphabetically by tool name (locale-stable)
-    local sorted=()
-    if (( ${#tmp_list[@]} )); then
-        local line
-        while IFS= read -r line; do
-            sorted+=("$line")
-        done < <(printf '%s\n' "${tmp_list[@]}" | LC_ALL=C sort)
-    fi
+    done < <(sorted_tool_lines "$filter_category")
 
     # Pagination bookkeeping
     VISIBLE_COUNT="${#sorted[@]}"
@@ -389,10 +453,10 @@ load_tools() {
     local start=$(( CURRENT_PAGE * PAGE_SIZE ))
     local end=$(( start + PAGE_SIZE - 1 ))
 
-    local idx label
+    local label i
     for i in "${!sorted[@]}"; do
         (( i < start || i > end )) && continue
-        idx="${sorted[$i]#*"$US"}"
+        idx="${sorted[$i]}"
 
         # Show description in list: "Name — Description" ([TEMP] prefix for temporary tier)
         label="${SC_NAME[$idx]} — ${SC_DESC[$idx]}"
@@ -480,7 +544,7 @@ menu_loop() {
 
     while true; do
         draw_menu
-        read -rsn1 key
+        read -rsn1 key || exit 0   # EOF on stdin: leave cleanly (never delete anything)
         case "$key" in
             $'\x1b')
                 # Use portable tiny-timeout for escape sequence lookahead
@@ -526,7 +590,7 @@ menu_loop() {
                     if [[ "$action" == "run" ]]; then
                         local args_line prompt="Arguments (optional): "
                         [[ -n "${SC_ARGS[$SELECTED_IDX]}" ]] && prompt="Arguments (optional; expects: ${SC_ARGS[$SELECTED_IDX]}): "
-                        read -rp "$prompt" args_line
+                        read -rp "$prompt" args_line || exit 0
                         if ! parse_args "$args_line"; then
                             echo "${RED}Could not parse arguments: $PARSE_ARGS_ERR. Tool not run.${RESET}"
                             read -rp "Press enter to continue..."
@@ -559,7 +623,7 @@ menu_loop() {
                 ;;
             "/")
                 if [[ "$MODE" == "tools" ]]; then
-                    read -rp "Search term (blank = reset): " SEARCH_TERM
+                    read -rp "Search term (blank = reset): " SEARCH_TERM || exit 0
                     SEARCH_TERM=$(lower "$SEARCH_TERM")
                     CURRENT_PAGE=0
                     load_tools "$SELECTED_CATEGORY"

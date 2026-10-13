@@ -11,7 +11,7 @@ The single-file architecture is a **deliberate choice**, not tech debt. Do not r
 | Path | Purpose |
 | --- | --- |
 | `troubleshooter.sh` | The interactive launcher (single file, Bash 4+) |
-| `scripts/` | Tool scripts (`*.sh`, `*.py`); each carries an `# orion:begin` ... `# orion:end` header that defines its catalog entry. Files starting with `_` or `.` are ignored |
+| `scripts/` | Tool scripts (`*.sh`, `*.py`); each carries an `# orion:begin` ... `# orion:end` header that defines its catalog entry. Files starting with `_` or `.` are ignored. Symlinks are ignored (`--check` WARN). Header values must not contain 0x1f (ERROR in regular tier, stripped in temp). Tool and category sorting is case-insensitive; categories differing only in case merge (`--check` WARN). A CRLF shebang line is a `--check` WARN |
 | `scripts/temp/` | Temporary (emergency) scripts; always listed under Temporary with `[TEMP]`, header optional |
 | `scripts/_template.sh`, `scripts/_template.py` | Copy these to start a new tool (not listed in the menu) |
 | `releases/` | Tarball releases |
@@ -52,6 +52,7 @@ Before shipping any change to `troubleshooter.sh`, verify at minimum:
 - A header value containing `|` renders correctly in the list and detail screens.
 - A tool receives arguments with quotes correctly (e.g. `"a b" c` is two args), and `$(...)` / `$VAR` stay literal.
 - `q` and Ctrl-C exit without deleting anything: `scripts/` is untouched afterward.
+- A symlink in `scripts/` is ignored (WARN in `--check`) and never chmod'ed or run; EOF on stdin (`printf '' | ./troubleshooter.sh`) exits 0 quickly without a redraw loop.
 
 ## Emergency (temporary) scripts fast lane
 

@@ -80,7 +80,7 @@ The launcher reads a comment block within the first 40 lines of each script (wor
 - `runs_on` is free text. Recommended vocabulary: `DL-master`, `DA-master`, `sensor`, `pod: <name>`, `off-box`, `any`.
 
 ### Categories
-Categories come from valid headers and are listed alphabetically, with Temporary always last. A category names the component
+Categories come from valid headers and are listed alphabetically (case-insensitively; spellings that differ only in case merge into one entry and `--check` warns), with Temporary always last. Tools are also sorted case-insensitively. A category names the component
 or problem domain being investigated (currently Connectors, Reporting, Data & Elasticsearch, Platform) — never the action
 type or risk; where it runs and its mode are attributes, not categories.
 
@@ -89,6 +89,9 @@ type or risk; where it runs and its mode are attributes, not categories.
 subdirectories, and `__pycache__` are ignored. A script without an `orion:begin` marker is skipped silently at launch
 (`--check` reports WARN); a script with a marker but a missing/empty required field or an invalid `mode` is also skipped
 (`--check` reports ERROR naming the problem).
+Symlinks are ignored (`--check` reports WARN "symlink ignored") so nothing outside `scripts/` is listed or run. A header value
+may not contain the ASCII unit-separator control character (0x1f): in the regular tier that is an ERROR, in `temp/` it is
+stripped. A script whose first line ends in CR (CRLF line endings) gets a `--check` WARN because it will fail to run.
 
 ### Temporary lane
 Scripts in `scripts/temp/` are always listed under the category **Temporary**, with a `[TEMP]` prefix, even with no header.
