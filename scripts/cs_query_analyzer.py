@@ -1,5 +1,13 @@
 #!/usr/bin/env python2
 # -*- coding: utf-8 -*-
+# orion:begin
+# name: Query Analyzer
+# category: Data & Elasticsearch
+# runs_on: DL-master
+# mode: read-only
+# args: --since <hours> | --start/--end YYYY-MM-DD | --focus <ISO time> [--window N] (run with --help for all options)
+# description: Analyze Aella UI and Elastic logs for heavy or slow queries; reads logs only, writes nothing
+# orion:end
 """
 cs_query_analyzer.py
 Analyze Aella UI + Elastic logs for heavy/slow queries, correlate UI⇄Elastic,

@@ -1,5 +1,12 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
+# orion:begin
+# name: Connector Troubleshoot
+# category: Connectors
+# runs_on: DA-master
+# mode: read-only
+# description: Generate a health report for every connector from log-collector-master pod logs (also writes its own connector_report_<timestamp>.json to the current directory)
+# orion:end
 """
 Connector Troubleshooting Script
 Automatically checks all log-collector-master pods and generates reports for all connectors.

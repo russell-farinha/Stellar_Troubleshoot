@@ -1,4 +1,11 @@
 #!/bin/bash
+# orion:begin
+# name: ES Dump by Day
+# category: Data & Elasticsearch
+# runs_on: any
+# mode: read-only
+# description: Export ES index data into daily gzipped files; requires elasticdump; writes export files to the chosen output directory and saves ~/.elasticdump_export.conf
+# orion:end
 
 # Provided by Tony Chou
 

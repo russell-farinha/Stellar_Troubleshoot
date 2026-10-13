@@ -2,19 +2,22 @@
 #
 # Project Orion
 # Modular, menu-driven tool for remote diagnostics
-# Ubuntu/Photon, dependency-free (bash + curl; optional python)
+# Ubuntu/Photon, dependency-free (bash; optional python)
+#
+# The tool catalog is built at startup from header comments in scripts/*.sh|*.py
+# (regular tier) and scripts/temp/*.sh|*.py (Temporary tier).
 #
 
-CONFIG_FILE="./tools.conf"
-BASE_DIR="./tools"
+SCRIPTS_DIR="scripts"
 APP_NAME="Project Orion"
-VERSION="1.2.0"
+VERSION="1.3.0"
 
 # Hardcoded settings (no ENV needed)
 PAGE_SIZE=5                  # Tools per page
-CONNECT_TIMEOUT=5            # curl connect timeout (seconds)
-MAX_TIME=60                  # curl max time (seconds)
-DOWNLOAD_RETRIES=3           # curl retries on transient failures
+HEADER_SCAN_LINES=40         # Header must sit within the first N lines
+TEMP_CATEGORY="Temporary"
+US=$'\x1f'                   # Internal field separator (cannot appear in header values)
+ALL_FILTER="${US}all"        # Sentinel for the "All tools" category filter
 
 # Colors (graceful fallback if tput/TERM unsupported)
 BOLD=""; RESET=""; CYAN=""; YELLOW=""; GREEN=""; RED=""
@@ -32,10 +35,11 @@ MENU_ACTIONS=()
 CURSOR=0
 MODE="categories"  # categories | tools | tool_detail
 SELECTED_CATEGORY=""
-SELECTED_TOOL_NAME=""
-SELECTED_TOOL_DESC=""
-SELECTED_TOOL_URL=""
-SELECTED_TOOL_RUNTIME=""  # "bash" | "python"
+SELECTED_IDX=-1           # index into the SC_* catalog arrays
+
+# Catalog (parallel arrays, one entry per scanned script)
+SC_FILE=(); SC_STATUS=(); SC_MSG=(); SC_LISTED=(); SC_TEMP=()
+SC_NAME=(); SC_CAT=(); SC_RUNS=(); SC_MODE=(); SC_ARGS=(); SC_DESC=(); SC_RUNTIME=()
 SEARCH_TERM=""
 CURRENT_PAGE=0
 TOTAL_PAGES=0
@@ -57,17 +61,9 @@ fi
 lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
 
 # --- Source handling ---------------------------------------------------------
-# The 4th column of tools.conf is a SOURCE: http(s):// URLs are downloaded and
-# cached under ./tools/; anything else is a local path, resolved relative to
-# the current working directory and executed in place.
-is_remote_source() {
-    case "$1" in
-        http://*|https://*) return 0;;
-        *) return 1;;
-    esac
-}
-
-# Local paths must stay inside the working directory: no absolute paths, no "..".
+# Tools are local scripts under ./scripts, resolved relative to the current
+# working directory and executed in place. Paths must stay inside the working
+# directory: no absolute paths, no "..".
 validate_local_source() {
     case "$1" in
         /*|*..*) return 1;;
@@ -75,21 +71,198 @@ validate_local_source() {
     return 0
 }
 
-# --- Runtime detection -------------------------------------------------------
-# Priority:
-# 1) If a 5th column is present and equals "python" or "bash", use it.
-# 2) Else infer from URL extension: .py => python, .sh => bash
-# 3) Else default to bash (backward compatible)
-detect_runtime() {
-    local url="$1" explicit="$2"
-    case "$(lower "$explicit")" in
-        python|bash) echo "$(lower "$explicit")"; return;;
-    esac
-    local ext="${url##*.}"
-    case "$(lower "$ext")" in
-        py) echo "python";;
-        sh) echo "bash";;
-        *)  echo "bash";;
+# --- Header scanner ----------------------------------------------------------
+# Header format (within the first HEADER_SCAN_LINES lines):
+#   # orion:begin
+#   # name: ...          (required)
+#   # category: ...      (required)
+#   # runs_on: ...       (required, free text)
+#   # mode: read-only|changes-state   (required)
+#   # description: ...   (required)
+#   # args: ...          (optional hint)
+#   # runtime: bash|python (optional; inferred from extension)
+#   # orion:end
+# Emits one line, fields separated by US (0x1f):
+#   state name category runs_on mode args description runtime
+# state: 0 = no begin marker, 1 = complete header, 2 = begin without end.
+parse_header() {
+    awk -v max="$HEADER_SCAN_LINES" '
+    function trim(x) { sub(/^[ \t]+/, "", x); sub(/[ \t]+$/, "", x); return x }
+    BEGIN { st = 0 }
+    NR > max { exit }
+    {
+        line = $0; sub(/\r$/, "", line)
+        if (st == 0) {
+            if (tolower(line) ~ /^[ \t]*#[ \t]*orion:begin[ \t]*$/) st = 2
+            next
+        }
+        if (tolower(line) ~ /^[ \t]*#[ \t]*orion:end[ \t]*$/) { st = 1; exit }
+        if (match(line, /^[ \t]*#[ \t]*[A-Za-z_]+[ \t]*:/)) {
+            key = substr(line, 1, RLENGTH)
+            val = substr(line, RLENGTH + 1)
+            sub(/^[ \t]*#[ \t]*/, "", key); sub(/[ \t]*:$/, "", key)
+            key = tolower(key)
+            if (!(key in v)) v[key] = trim(val)
+        }
+    }
+    END {
+        US = "\037"
+        printf "%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s\n", st, US, v["name"], US, v["category"], US, \
+            v["runs_on"], US, v["mode"], US, v["args"], US, v["description"], US, v["runtime"]
+    }' "$1"
+}
+
+# Scan one file and append it to the SC_* arrays.
+# $1 = path, $2 = 1 if Temporary tier, 0 otherwise
+scan_one() {
+    local f="$1" is_temp="$2"
+    local st name cat runs mode args desc rt
+    IFS="$US" read -r st name cat runs mode args desc rt < <(parse_header "$f")
+
+    local base="${f##*/}" ext rt_default
+    ext="$(lower "${base##*.}")"
+    [[ "$ext" == "py" ]] && rt_default="python" || rt_default="bash"
+
+    local mode_lc rt_lc
+    mode_lc="$(lower "$mode")"
+    rt_lc="$(lower "$rt")"
+
+    local mode_ok=0 rt_ok=0
+    [[ "$mode_lc" == "read-only" || "$mode_lc" == "changes-state" ]] && mode_ok=1
+    [[ -z "$rt_lc" || "$rt_lc" == "bash" || "$rt_lc" == "python" ]] && rt_ok=1
+
+    local status msg listed=0
+    if (( is_temp )); then
+        local stem="${base%.*}"
+        local missing=()
+        local f_name="${stem//_/ }" f_desc="Temporary script - no documentation yet"
+        local f_runs="not specified" f_mode="not specified" f_args="" f_rt="$rt_default"
+        if [[ "$st" == "1" ]]; then
+            [[ -n "$name" ]] && f_name="$name" || missing+=("name")
+            [[ -n "$desc" ]] && f_desc="$desc" || missing+=("description")
+            [[ -n "$runs" ]] && f_runs="$runs" || missing+=("runs_on")
+            if (( mode_ok )); then f_mode="$mode_lc"; else missing+=("mode"); fi
+            [[ -n "$args" ]] && f_args="$args"
+            if [[ -n "$rt_lc" ]]; then
+                if (( rt_ok )); then f_rt="$rt_lc"; else missing+=("runtime"); fi
+            fi
+            [[ -z "$cat" ]] && missing+=("category")
+            if (( ${#missing[@]} )); then
+                msg="partial header (missing or invalid: ${missing[*]}); defaults used"
+            else
+                msg="header complete"
+            fi
+        elif [[ "$st" == "2" ]]; then
+            msg="orion:begin without orion:end; defaults used"
+        else
+            msg="no header; defaults used"
+        fi
+        status="TEMP"; listed=1
+        name="$f_name"; desc="$f_desc"; runs="$f_runs"; mode="$f_mode"; args="$f_args"; rt="$f_rt"
+        cat="$TEMP_CATEGORY"
+    else
+        case "$st" in
+            0) status="WARN"; msg="no orion header (skipped)";;
+            2) status="ERROR"; msg="orion:begin without orion:end within first ${HEADER_SCAN_LINES} lines (skipped)";;
+            *)
+                local probs=()
+                [[ -z "$name" ]] && probs+=("missing name")
+                [[ -z "$cat" ]] && probs+=("missing category")
+                [[ -z "$runs" ]] && probs+=("missing runs_on")
+                [[ -z "$desc" ]] && probs+=("missing description")
+                if [[ -z "$mode" ]]; then
+                    probs+=("missing mode")
+                elif (( ! mode_ok )); then
+                    probs+=("invalid mode '$mode' (use read-only or changes-state)")
+                fi
+                (( rt_ok )) || probs+=("invalid runtime '$rt' (use bash or python)")
+                [[ "$(lower "$cat")" == "$(lower "$TEMP_CATEGORY")" ]] && probs+=("category '$TEMP_CATEGORY' is reserved")
+                if (( ${#probs[@]} )); then
+                    local IFS=';'
+                    status="ERROR"; msg="${probs[*]} (skipped)"
+                    msg="${msg//;/; }"
+                else
+                    status="OK"; msg="$name [$cat]"; listed=1
+                    mode="$mode_lc"
+                    [[ -n "$rt_lc" ]] && rt="$rt_lc" || rt="$rt_default"
+                fi
+                ;;
+        esac
+    fi
+
+    SC_FILE+=("$f"); SC_STATUS+=("$status"); SC_MSG+=("$msg"); SC_LISTED+=("$listed"); SC_TEMP+=("$is_temp")
+    SC_NAME+=("$name"); SC_CAT+=("$cat"); SC_RUNS+=("$runs"); SC_MODE+=("$mode")
+    SC_ARGS+=("$args"); SC_DESC+=("$desc"); SC_RUNTIME+=("$rt")
+}
+
+# Scan scripts/ (regular) then scripts/temp/ (Temporary). Read-only: never writes.
+scan_scripts() {
+    SC_FILE=(); SC_STATUS=(); SC_MSG=(); SC_LISTED=(); SC_TEMP=()
+    SC_NAME=(); SC_CAT=(); SC_RUNS=(); SC_MODE=(); SC_ARGS=(); SC_DESC=(); SC_RUNTIME=()
+    [[ -d "$SCRIPTS_DIR" ]] || return 1
+    local tier dir f base
+    for tier in 0 1; do
+        dir="$SCRIPTS_DIR"
+        (( tier )) && dir="$SCRIPTS_DIR/temp"
+        for f in "$dir"/*; do
+            [[ -f "$f" ]] || continue
+            base="${f##*/}"
+            case "$base" in
+                _*|.*) continue;;
+                *.sh|*.py) ;;
+                *) continue;;
+            esac
+            scan_one "$f" "$tier"
+        done
+    done
+    return 0
+}
+
+# Split an argument line into PARSED_ARGS without eval, expansion or globbing.
+# Whitespace separates words; '...' is literal; "..." groups (only \" and \\
+# are escapes); a backslash outside quotes escapes the next character.
+# Returns 1 (and sets PARSE_ARGS_ERR) on an unterminated quote or trailing "\".
+PARSED_ARGS=(); PARSE_ARGS_ERR=""
+parse_args() {
+    local line="$1" i=0 n=${#1} c cur="" inword=0 q=""
+    PARSED_ARGS=(); PARSE_ARGS_ERR=""
+    while (( i < n )); do
+        c="${line:i:1}"
+        if [[ "$q" == "'" ]]; then
+            if [[ "$c" == "'" ]]; then q=""; else cur+="$c"; fi
+        elif [[ "$q" == '"' ]]; then
+            if [[ "$c" == '"' ]]; then
+                q=""
+            elif [[ "$c" == '\' && ( "${line:i+1:1}" == '"' || "${line:i+1:1}" == '\' ) ]]; then
+                cur+="${line:i+1:1}"; ((i++))
+            else
+                cur+="$c"
+            fi
+        else
+            case "$c" in
+                ' '|$'\t')
+                    if (( inword )); then PARSED_ARGS+=("$cur"); cur=""; inword=0; fi;;
+                "'") q="'"; inword=1;;
+                '"') q='"'; inword=1;;
+                '\')
+                    if (( i + 1 >= n )); then PARSE_ARGS_ERR="trailing backslash"; PARSED_ARGS=(); return 1; fi
+                    cur+="${line:i+1:1}"; inword=1; ((i++));;
+                *) cur+="$c"; inword=1;;
+            esac
+        fi
+        ((i++))
+    done
+    if [[ -n "$q" ]]; then PARSE_ARGS_ERR="unterminated $q quote"; PARSED_ARGS=(); return 1; fi
+    (( inword )) && PARSED_ARGS+=("$cur")
+    return 0
+}
+
+# Colored mode text for display
+mode_display() {
+    case "$1" in
+        changes-state)  printf '%s' "${BOLD}${RED}changes-state (can modify the platform)${RESET}";;
+        read-only)      printf '%s' "${GREEN}read-only${RESET}";;
+        *)              printf '%s' "${YELLOW}${1}${RESET}";;
     esac
 }
 
@@ -100,18 +273,27 @@ draw_menu() {
     echo
 
     if [[ "$MODE" == "tools" ]]; then
-        echo "Category: $SELECTED_CATEGORY"
+        if [[ "$SELECTED_CATEGORY" == "$ALL_FILTER" ]]; then
+            echo "Category: All tools"
+        else
+            echo "Category: $SELECTED_CATEGORY"
+        fi
         echo "Results: $VISIBLE_COUNT  Page: $((CURRENT_PAGE+1))/$((TOTAL_PAGES==0?1:TOTAL_PAGES))"
     elif [[ "$MODE" == "tool_detail" ]]; then
-        echo "Tool: $SELECTED_TOOL_NAME"
+        local i="$SELECTED_IDX"
+        echo "Tool: ${SC_NAME[$i]}"
         echo
-        echo "${BOLD}Description:${RESET} $SELECTED_TOOL_DESC"
-        echo "Runtime: ${SELECTED_TOOL_RUNTIME}"
-        if is_remote_source "$SELECTED_TOOL_URL"; then
-            echo "Source: remote (${SELECTED_TOOL_URL})"
-        else
-            echo "Source: local (${SELECTED_TOOL_URL})"
+        if [[ "${SC_TEMP[$i]}" == "1" ]]; then
+            echo "${BOLD}${YELLOW}NOTICE: This is a TEMPORARY script. It has not been documented or reviewed for a release.${RESET}"
+            echo
         fi
+        echo "${BOLD}Description:${RESET} ${SC_DESC[$i]}"
+        echo "Category: ${SC_CAT[$i]}"
+        echo "Runs on: ${SC_RUNS[$i]}"
+        echo "Mode: $(mode_display "${SC_MODE[$i]}")"
+        [[ -n "${SC_ARGS[$i]}" ]] && echo "Args: ${SC_ARGS[$i]}"
+        echo "Runtime: ${SC_RUNTIME[$i]}"
+        echo "Source: local (${SC_FILE[$i]})"
         echo
     fi
 
@@ -138,26 +320,37 @@ draw_menu() {
     esac
 }
 
-# Load categories dynamically (multi-word safe)
+# Load categories from the scanned catalog (alphabetical; Temporary always last)
 load_categories() {
     MENU_OPTIONS=()
     MENU_ACTIONS=()
 
-    if [[ ! -f "$CONFIG_FILE" ]]; then
-        echo "${RED}Missing config file: $CONFIG_FILE${RESET}"
-        exit 1
+    local i have_temp=0
+    local cats=()
+    for i in "${!SC_FILE[@]}"; do
+        [[ "${SC_LISTED[$i]}" == "1" ]] || continue
+        if [[ "${SC_TEMP[$i]}" == "1" ]]; then
+            have_temp=1
+        else
+            cats+=("${SC_CAT[$i]}")
+        fi
+    done
+
+    local cat
+    if (( ${#cats[@]} )); then
+        while IFS= read -r cat; do
+            [[ -z "$cat" ]] && continue
+            MENU_OPTIONS+=("$cat")
+            MENU_ACTIONS+=("$cat")
+        done < <(printf '%s\n' "${cats[@]}" | LC_ALL=C sort -u)
+    fi
+    if (( have_temp )); then
+        MENU_OPTIONS+=("$TEMP_CATEGORY")
+        MENU_ACTIONS+=("$TEMP_CATEGORY")
     fi
 
-    CATEGORIES_TEMP=$(awk -F'|' '{gsub(/\r/,""); gsub(/^[ \t]+|[ \t]+$/,"",$1); if($1 != "" && $1 !~ /^#/) print $1}' "$CONFIG_FILE" | LC_ALL=C sort -u)
-
-    while IFS= read -r cat; do
-        [[ -z "$cat" ]] && continue
-        MENU_OPTIONS+=("$cat")
-        MENU_ACTIONS+=("$cat")
-    done <<< "$CATEGORIES_TEMP"
-
     MENU_OPTIONS+=("All tools")
-    MENU_ACTIONS+=("all")
+    MENU_ACTIONS+=("$ALL_FILTER")
 }
 
 # Load tools for a selected category (alphabetically, with search filter, paginated)
@@ -166,31 +359,28 @@ load_tools() {
     MENU_OPTIONS=()
     MENU_ACTIONS=()
 
-    # Temporary array to hold "name|category|name|description|url|runtime" for sorting
-    local tmp_list=()
-
-    while IFS='|' read -r category name description url runtime_col rest; do
-        [[ -z "$category" || "$category" == \#* ]] && continue
-        category=$(echo "$category" | tr -d '\r' | sed 's/^[ \t]*//;s/[ \t]*$//')
-        name=$(echo "$name" | tr -d '\r' | sed 's/^[ \t]*//;s/[ \t]*$//')
-        description=$(echo "$description" | tr -d '\r' | sed 's/^[ \t]*//;s/[ \t]*$//')
-        url=$(echo "$url" | tr -d '\r' | sed 's/^[ \t]*//;s/[ \t]*$//')
-        local runtime; runtime=$(detect_runtime "$url" "$runtime_col")
-
-        if [[ "$filter_category" == "all" || "$category" == "$filter_category" ]]; then
+    # Lines of "name<US>index" for sorting
+    local tmp_list=() i name_lc desc_lc
+    for i in "${!SC_FILE[@]}"; do
+        [[ "${SC_LISTED[$i]}" == "1" ]] || continue
+        if [[ "$filter_category" == "$ALL_FILTER" || "${SC_CAT[$i]}" == "$filter_category" ]]; then
             # Search in names and descriptions (case-insensitive)
-            local name_lc desc_lc
-            name_lc=$(lower "$name")
-            desc_lc=$(lower "$description")
+            name_lc=$(lower "${SC_NAME[$i]}")
+            desc_lc=$(lower "${SC_DESC[$i]}")
             if [[ -z "$SEARCH_TERM" || "$name_lc" == *"$SEARCH_TERM"* || "$desc_lc" == *"$SEARCH_TERM"* ]]; then
-                tmp_list+=("$name|$category|$name|$description|$url|$runtime")
+                tmp_list+=("${SC_NAME[$i]}${US}$i")
             fi
         fi
-    done < "$CONFIG_FILE"
+    done
 
     # Sort alphabetically by tool name (locale-stable)
-    IFS=$'\n' read -r -d '' -a sorted < <(printf '%s\n' "${tmp_list[@]}" | LC_ALL=C sort && printf '\0')
-    unset IFS
+    local sorted=()
+    if (( ${#tmp_list[@]} )); then
+        local line
+        while IFS= read -r line; do
+            sorted+=("$line")
+        done < <(printf '%s\n' "${tmp_list[@]}" | LC_ALL=C sort)
+    fi
 
     # Pagination bookkeeping
     VISIBLE_COUNT="${#sorted[@]}"
@@ -199,14 +389,16 @@ load_tools() {
     local start=$(( CURRENT_PAGE * PAGE_SIZE ))
     local end=$(( start + PAGE_SIZE - 1 ))
 
+    local idx label
     for i in "${!sorted[@]}"; do
         (( i < start || i > end )) && continue
-        IFS='|' read -r _ category name description url runtime <<< "${sorted[$i]}"
+        idx="${sorted[$i]#*"$US"}"
 
-        # Show description in list: "Name — Description"
-        local label="$name — $description"
+        # Show description in list: "Name — Description" ([TEMP] prefix for temporary tier)
+        label="${SC_NAME[$idx]} — ${SC_DESC[$idx]}"
+        [[ "${SC_TEMP[$idx]}" == "1" ]] && label="[TEMP] $label"
         MENU_OPTIONS+=("$label")
-        MENU_ACTIONS+=("$category|$name|$description|$url|$runtime")
+        MENU_ACTIONS+=("tool:$idx")
     done
 
     # Pager controls (only when needed)
@@ -226,7 +418,7 @@ load_tools() {
 # Load tool detail menu (Run / Back)
 load_tool_detail() {
     MENU_OPTIONS=("Run tool" "Back to tools")
-    MENU_ACTIONS=("run|$SELECTED_CATEGORY|$SELECTED_TOOL_NAME|$SELECTED_TOOL_DESC|$SELECTED_TOOL_URL|$SELECTED_TOOL_RUNTIME" "back")
+    MENU_ACTIONS=("run" "back")
 }
 
 # Choose python interpreter (python3 preferred)
@@ -240,100 +432,24 @@ pick_python() {
     fi
 }
 
-# Run a tool (with simple cache reuse + curl retries)
+# Run a tool in place from scripts/
 run_tool() {
-    local category="$1"
-    local name="$2"
-    local url="$3"
-    local runtime="$4"
-    shift 4
+    local idx="$1"
+    shift
     local extra_args=("$@")
+    local name="${SC_NAME[$idx]}" url="${SC_FILE[$idx]}" runtime="${SC_RUNTIME[$idx]}"
 
-    # Local source: no download, no cache — validate and run in place.
-    if ! is_remote_source "$url"; then
-        if ! validate_local_source "$url"; then
-            echo "${RED}Invalid local script path: $url${RESET}"
-            read -rp "Press enter to continue..."
-            return
-        fi
-        local local_path="./${url#./}"
-        if [[ ! -f "$local_path" || ! -s "$local_path" ]]; then
-            echo "${RED}Local script missing or empty: $local_path${RESET}"
-            read -rp "Press enter to continue..."
-            return
-        fi
-        echo "${GREEN}Running $name...${RESET}"
-        if [[ "$runtime" == "python" ]]; then
-            local py; py=$(pick_python)
-            if [[ -z "$py" ]]; then
-                echo "${RED}No python interpreter found (tried python3, python).${RESET}"
-                read -rp "Press enter to continue..."
-                return
-            fi
-            "$py" "$local_path" "${extra_args[@]}"
-        else
-            chmod +x "$local_path"
-            "$local_path" "${extra_args[@]}"
-        fi
-        local rc=$?
-        if (( rc == 0 )); then
-            echo "${GREEN}Tool execution finished.${RESET}"
-        else
-            echo "${RED}Tool exited with code $rc.${RESET}"
-        fi
+    if ! validate_local_source "$url"; then
+        echo "${RED}Invalid local script path: $url${RESET}"
         read -rp "Press enter to continue..."
         return
     fi
-
-    local dir="$BASE_DIR/$category"
-    mkdir -p "$dir"
-
-    # Pick a sensible file extension for caching
-    local ext="sh"
-    [[ "$runtime" == "python" ]] && ext="py"
-    case "$(lower "${url##*.}")" in
-        py) ext="py" ;;
-        sh) ext="sh" ;;
-    esac
-
-    local script_path="$dir/${name// /_}.$ext"
-
-    if [[ -f "$script_path" && -s "$script_path" ]]; then
-        read -rp "Cached copy found. Use cached (u) or re-download (r)? [u/r]: " _ans
-        if [[ "$(lower "${_ans:-u}")" != "r" ]]; then
-            echo "${GREEN}Running cached $name...${RESET}"
-            if [[ "$runtime" == "python" ]]; then
-                local py; py=$(pick_python)
-                if [[ -z "$py" ]]; then
-                    echo "${RED}No python interpreter found (tried python3, python).${RESET}"
-                    read -rp "Press enter to continue..."
-                    return
-                fi
-                "$py" "$script_path" "${extra_args[@]}"
-            else
-                chmod +x "$script_path"
-                "$script_path" "${extra_args[@]}"
-            fi
-            local rc=$?
-            if (( rc == 0 )); then
-                echo "${GREEN}Tool execution finished.${RESET}"
-            else
-                echo "${RED}Tool exited with code $rc.${RESET}"
-            fi
-            read -rp "Press enter to continue..."
-            return
-        fi
-    fi
-
-    echo "${GREEN}Downloading tool...${RESET}"
-    if ! curl -fsSL --connect-timeout "$CONNECT_TIMEOUT" --max-time "$MAX_TIME" \
-         --retry "$DOWNLOAD_RETRIES" --retry-delay 1 \
-         -o "$script_path" "$url"; then
-        echo "${RED}Download failed!${RESET}"
+    local local_path="./${url#./}"
+    if [[ ! -f "$local_path" || ! -s "$local_path" ]]; then
+        echo "${RED}Local script missing or empty: $local_path${RESET}"
         read -rp "Press enter to continue..."
         return
     fi
-
     echo "${GREEN}Running $name...${RESET}"
     if [[ "$runtime" == "python" ]]; then
         local py; py=$(pick_python)
@@ -342,12 +458,11 @@ run_tool() {
             read -rp "Press enter to continue..."
             return
         fi
-        "$py" "$script_path" "${extra_args[@]}"
+        "$py" "$local_path" "${extra_args[@]}"
     else
-        chmod +x "$script_path"
-        "$script_path" "${extra_args[@]}"
+        chmod +x "$local_path"
+        "$local_path" "${extra_args[@]}"
     fi
-
     local rc=$?
     if (( rc == 0 )); then
         echo "${GREEN}Tool execution finished.${RESET}"
@@ -401,33 +516,24 @@ menu_loop() {
                         load_tools "$SELECTED_CATEGORY"
                         CURSOR=0
                     else
-                        IFS='|' read -r category name description url runtime <<< "${MENU_ACTIONS[$CURSOR]}"
-                        SELECTED_CATEGORY="$category"
-                        SELECTED_TOOL_NAME="$name"
-                        SELECTED_TOOL_DESC="$description"
-                        SELECTED_TOOL_URL="$url"
-                        SELECTED_TOOL_RUNTIME="$runtime"
+                        SELECTED_IDX="${data#tool:}"
                         MODE="tool_detail"
                         load_tool_detail
                         CURSOR=0
                     fi
                 elif [[ "$MODE" == "tool_detail" ]]; then
-                    IFS='|' read -r action category name description url runtime <<< "${MENU_ACTIONS[$CURSOR]}"
+                    local action="${MENU_ACTIONS[$CURSOR]}"
                     if [[ "$action" == "run" ]]; then
-                        local args_line
-                        read -rp "Arguments (optional): " args_line
-                        local args=()
-                        if [[ -n "$args_line" ]]; then
-                            local had_noglob=0
-                            [[ $- == *f* ]] && had_noglob=1
-                            set -f
-                            # shellcheck disable=SC2086
-                            eval "set -- $args_line"
-                            args=("$@")
-                            (( had_noglob == 0 )) && set +f
-                            set --
+                        local args_line prompt="Arguments (optional): "
+                        [[ -n "${SC_ARGS[$SELECTED_IDX]}" ]] && prompt="Arguments (optional; expects: ${SC_ARGS[$SELECTED_IDX]}): "
+                        read -rp "$prompt" args_line
+                        if ! parse_args "$args_line"; then
+                            echo "${RED}Could not parse arguments: $PARSE_ARGS_ERR. Tool not run.${RESET}"
+                            read -rp "Press enter to continue..."
+                            continue
                         fi
-                        run_tool "$category" "$name" "$url" "$runtime" "${args[@]}"
+                        local args=("${PARSED_ARGS[@]}")
+                        run_tool "$SELECTED_IDX" "${args[@]}"
                         load_tool_detail
                         CURSOR=0
                     elif [[ "$action" == "back" ]]; then
@@ -489,13 +595,54 @@ Usage: ${0##*/} [OPTIONS]
 
 Launch the ${APP_NAME} interactive menu for remote diagnostics.
 
+The tool catalog is built from header comments in scripts/*.sh|*.py;
+scripts/temp/ holds undocumented Temporary scripts.
+
 Options:
   -h, --help      Show this help message and exit
   -V, --version   Show the ${APP_NAME} version and exit
+      --check     Validate script headers (OK/WARN/ERROR/TEMP per file) and exit;
+                  exit status is 0 only when every scanned file is OK
 EOF
 }
 
+# Print per-file header status; exit status 1 unless every scanned file is OK
+check_catalog() {
+    if ! scan_scripts; then
+        echo "${RED}Scripts directory not found: $SCRIPTS_DIR${RESET}" >&2
+        return 1
+    fi
+    local i n_ok=0 n_warn=0 n_err=0 n_temp=0 color
+    for i in "${!SC_FILE[@]}"; do
+        case "${SC_STATUS[$i]}" in
+            OK)    n_ok=$((n_ok+1)); color="$GREEN";;
+            WARN)  n_warn=$((n_warn+1)); color="$YELLOW";;
+            ERROR) n_err=$((n_err+1)); color="$RED";;
+            TEMP)  n_temp=$((n_temp+1)); color="$YELLOW";;
+        esac
+        printf '%s%-5s%s %s: %s\n' "$color" "${SC_STATUS[$i]}" "$RESET" "${SC_FILE[$i]}" "${SC_MSG[$i]}"
+        if [[ "${SC_STATUS[$i]}" == "TEMP" ]]; then
+            printf '      reminder: promote it - add an orion header and move it out of %s/temp/\n' "$SCRIPTS_DIR"
+        fi
+    done
+    echo
+    local cats=() cat_line="(none)"
+    load_categories
+    for i in "${!MENU_ACTIONS[@]}"; do
+        [[ "${MENU_ACTIONS[$i]}" == "$ALL_FILTER" ]] && continue
+        cats+=("${MENU_OPTIONS[$i]}")
+    done
+    if (( ${#cats[@]} )); then
+        cat_line=$(printf '%s, ' "${cats[@]}"); cat_line="${cat_line%, }"
+    fi
+    echo "Categories in use: $cat_line"
+    echo "Summary: ${#SC_FILE[@]} file(s): $n_ok OK, $n_warn WARN, $n_err ERROR, $n_temp TEMP"
+    (( n_warn + n_err + n_temp == 0 )) && return 0
+    return 1
+}
+
 main() {
+    local do_check=0
     while [[ $# -gt 0 ]]; do
         case "$1" in
             -h|--help)
@@ -505,6 +652,9 @@ main() {
             -V|--version)
                 print_version
                 return 0
+                ;;
+            --check)
+                do_check=1
                 ;;
             --)
                 shift
@@ -524,8 +674,19 @@ main() {
         shift
     done
 
-    if [[ ! -f "$CONFIG_FILE" ]]; then
-        echo "${RED}Missing config file: $CONFIG_FILE${RESET}"
+    if (( do_check )); then
+        check_catalog
+        return $?
+    fi
+
+    if ! scan_scripts; then
+        echo "${RED}Scripts directory not found: $SCRIPTS_DIR${RESET}" >&2
+        return 1
+    fi
+    local listed=0 i
+    for i in "${!SC_LISTED[@]}"; do [[ "${SC_LISTED[$i]}" == "1" ]] && listed=1; done
+    if (( ! listed )); then
+        echo "${RED}No tools found in $SCRIPTS_DIR (run with --check to see why).${RESET}" >&2
         return 1
     fi
 
