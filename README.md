@@ -89,9 +89,9 @@ type or risk; where it runs and its mode are attributes, not categories.
 subdirectories, and `__pycache__` are ignored. A script without an `orion:begin` marker is skipped silently at launch
 (`--check` reports WARN); a script with a marker but a missing/empty required field or an invalid `mode` is also skipped
 (`--check` reports ERROR naming the problem).
-Symlinks are ignored (`--check` reports WARN "symlink ignored") so nothing outside `scripts/` is listed or run. A header value
+Symlinks are ignored (`--check` reports WARN "symlink ignored") so nothing outside `scripts/` is listed or run. Symlinked `scripts/` or `scripts/temp/` directories are not supported: nothing is listed from them and `--check` warns. A header value
 may not contain the ASCII unit-separator control character (0x1f): in the regular tier that is an ERROR, in `temp/` it is
-stripped. A script whose first line ends in CR (CRLF line endings) gets a `--check` WARN because it will fail to run.
+stripped. A bash script whose first line ends in CR (CRLF line endings) gets a `--check` WARN because it will fail to run (Python tools are not affected).
 
 ### Temporary lane
 Scripts in `scripts/temp/` are always listed under the category **Temporary**, with a `[TEMP]` prefix, even with no header.

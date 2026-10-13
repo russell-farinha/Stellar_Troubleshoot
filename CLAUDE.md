@@ -11,7 +11,7 @@ The single-file architecture is a **deliberate choice**, not tech debt. Do not r
 | Path | Purpose |
 | --- | --- |
 | `troubleshooter.sh` | The interactive launcher (single file, Bash 4+) |
-| `scripts/` | Tool scripts (`*.sh`, `*.py`); each carries an `# orion:begin` ... `# orion:end` header that defines its catalog entry. Files starting with `_` or `.` are ignored. Symlinks are ignored (`--check` WARN). Header values must not contain 0x1f (ERROR in regular tier, stripped in temp). Tool and category sorting is case-insensitive; categories differing only in case merge (`--check` WARN). A CRLF shebang line is a `--check` WARN |
+| `scripts/` | Tool scripts (`*.sh`, `*.py`); each carries an `# orion:begin` ... `# orion:end` header that defines its catalog entry. Files starting with `_` or `.` are ignored. Symlinks are ignored (`--check` WARN). Symlinked `scripts/` or `scripts/temp/` directories are unsupported (nothing listed, `--check` WARN). Header values must not contain 0x1f (ERROR in regular tier, stripped in temp). Tool and category sorting is case-insensitive; categories differing only in case merge (`--check` WARN). A CRLF shebang line on a bash tool is a `--check` WARN (not for Python) |
 | `scripts/temp/` | Temporary (emergency) scripts; always listed under Temporary with `[TEMP]`, header optional |
 | `scripts/_template.sh`, `scripts/_template.py` | Copy these to start a new tool (not listed in the menu) |
 | `releases/` | Tarball releases |

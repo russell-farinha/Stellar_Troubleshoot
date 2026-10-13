@@ -211,7 +211,10 @@ scan_one() {
         esac
     fi
 
-    if (( crlf )); then
+    # Only matters for bash tools (executed via their shebang); python runs through the interpreter
+    local eff_rt="$rt_default"
+    (( listed )) && eff_rt="$rt"
+    if (( crlf )) && [[ "$eff_rt" == "bash" ]]; then
         if [[ "$status" == "OK" ]]; then
             status="WARN"; msg="CRLF line endings (will fail to run)"
         else
@@ -233,6 +236,13 @@ scan_scripts() {
     for tier in 0 1; do
         dir="$SCRIPTS_DIR"
         (( tier )) && dir="$SCRIPTS_DIR/temp"
+        # A symlinked scripts/ or scripts/temp/ is unsupported: list nothing from it
+        if [[ -L "$dir" ]]; then
+            SC_FILE+=("$dir"); SC_STATUS+=("WARN"); SC_MSG+=("$dir/ is a symlink: unsupported, nothing listed"); SC_LISTED+=(0); SC_TEMP+=("$tier")
+            SC_NAME+=(""); SC_CAT+=(""); SC_RUNS+=(""); SC_MODE+=(""); SC_ARGS+=(""); SC_DESC+=(""); SC_RUNTIME+=("")
+            (( tier == 0 )) && break
+            continue
+        fi
         for f in "$dir"/*; do
             [[ -e "$f" || -L "$f" ]] || continue
             base="${f##*/}"
@@ -505,13 +515,13 @@ run_tool() {
 
     if ! validate_local_source "$url"; then
         echo "${RED}Invalid local script path: $url${RESET}"
-        read -rp "Press enter to continue..."
+        read -rp "Press enter to continue..." || exit 0
         return
     fi
     local local_path="./${url#./}"
     if [[ ! -f "$local_path" || ! -s "$local_path" ]]; then
         echo "${RED}Local script missing or empty: $local_path${RESET}"
-        read -rp "Press enter to continue..."
+        read -rp "Press enter to continue..." || exit 0
         return
     fi
     echo "${GREEN}Running $name...${RESET}"
@@ -519,7 +529,7 @@ run_tool() {
         local py; py=$(pick_python)
         if [[ -z "$py" ]]; then
             echo "${RED}No python interpreter found (tried python3, python).${RESET}"
-            read -rp "Press enter to continue..."
+            read -rp "Press enter to continue..." || exit 0
             return
         fi
         "$py" "$local_path" "${extra_args[@]}"
@@ -533,7 +543,7 @@ run_tool() {
     else
         echo "${RED}Tool exited with code $rc.${RESET}"
     fi
-    read -rp "Press enter to continue..."
+    read -rp "Press enter to continue..." || exit 0
 }
 
 # Main menu loop
@@ -593,7 +603,7 @@ menu_loop() {
                         read -rp "$prompt" args_line || exit 0
                         if ! parse_args "$args_line"; then
                             echo "${RED}Could not parse arguments: $PARSE_ARGS_ERR. Tool not run.${RESET}"
-                            read -rp "Press enter to continue..."
+                            read -rp "Press enter to continue..." || exit 0
                             continue
                         fi
                         local args=("${PARSED_ARGS[@]}")
@@ -750,7 +760,11 @@ main() {
     local listed=0 i
     for i in "${!SC_LISTED[@]}"; do [[ "${SC_LISTED[$i]}" == "1" ]] && listed=1; done
     if (( ! listed )); then
-        echo "${RED}No tools found in $SCRIPTS_DIR (run with --check to see why).${RESET}" >&2
+        if [[ -L "$SCRIPTS_DIR" ]]; then
+            echo "${RED}$SCRIPTS_DIR is a symlink, which is unsupported: no tools listed (run with --check for details).${RESET}" >&2
+        else
+            echo "${RED}No tools found in $SCRIPTS_DIR (run with --check to see why).${RESET}" >&2
+        fi
         return 1
     fi
 
