@@ -24,14 +24,14 @@ Both land in the local `releases/orion-<stamp>/` directory — which is **gitign
 
    If `git status` shows uncommitted changes or unpushed commits, stop and surface that.
 
-2. Stamp and package. Include `troubleshooter.sh`, `tools.conf`, `README.md`, and `scripts/`. Exclude `CLAUDE.md`, `.claude/`, `tools/` (runtime cache), and `releases/` itself:
+2. Stamp and package. Include `troubleshooter.sh`, `README.md`, and `scripts/` (the catalog is built from script headers; there is no `tools.conf`). Exclude `CLAUDE.md`, `.claude/`, and `releases/` itself:
 
    ```bash
    STAMP=$(date +%Y_%m_%d_%H_%M)
    mkdir -p "releases/orion-$STAMP"
    tar -czf "releases/orion-$STAMP/orion-$STAMP.tar.gz" --uid 0 --gid 0 \
        --exclude '.DS_Store' --exclude '__pycache__' \
-       troubleshooter.sh tools.conf README.md scripts
+       troubleshooter.sh README.md scripts
    ```
 
    (`--uid 0 --gid 0` matches the root-owned entries in prior releases; bsdtar syntax — on GNU tar use `--owner=0 --group=0`.)

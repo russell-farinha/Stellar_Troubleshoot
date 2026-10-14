@@ -1,4 +1,12 @@
 #!/usr/bin/env python2
+# orion:begin
+# name: LD Recover
+# category: Platform
+# runs_on: any
+# mode: changes-state
+# args: --confirm (optional; omit for report-only)
+# description: Scan LaunchDarkly fleet health; report-only by default, pass --confirm to restart stuck services
+# orion:end
 """
 Standalone LaunchDarkly (LD) fleet status scan + recovery -- ON-PREM,
 Python 2 AND Python 3 compatible, zero repo deps.

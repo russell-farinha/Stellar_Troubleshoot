@@ -1,4 +1,11 @@
 #!/usr/bin/env python2
+# orion:begin
+# name: Report Outcome
+# category: Reporting
+# runs_on: DL-master
+# mode: read-only
+# description: Diagnose failing reports from stellar-report and stellar-mail logs; reads logs only, writes nothing
+# orion:end
 import argparse
 import gzip
 import os
