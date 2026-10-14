@@ -1,4 +1,4 @@
-# Project Orion 1.3.0
+# Project Orion 1.3.1
 
 Project Orion is a self-contained Bash launcher that presents an interactive, keyboard-driven menu for running diagnostic
 and helper utilities. The catalogue is built at startup by scanning the scripts under `scripts/` for a small self-describing
@@ -49,7 +49,7 @@ Project Orion exposes its metadata without launching the UI:
 
 ```bash
 ./troubleshooter.sh --help     # Usage information
-./troubleshooter.sh --version  # Prints "Project Orion 1.3.0"
+./troubleshooter.sh --version  # Prints "Project Orion 1.3.1"
 ./troubleshooter.sh --check    # Validate script headers and exit
 ```
 
