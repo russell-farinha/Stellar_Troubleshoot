@@ -10,7 +10,7 @@
 
 SCRIPTS_DIR="scripts"
 APP_NAME="Project Orion"
-VERSION="1.3.0"
+VERSION="1.3.1"
 
 # Hardcoded settings (no ENV needed)
 PAGE_SIZE=5                  # Tools per page
