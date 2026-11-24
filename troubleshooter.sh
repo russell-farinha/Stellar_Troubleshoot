@@ -388,7 +388,8 @@ runs_on_nodes() {
 
 # Best-effort detection: sets NODE_ACTIVE/NODE_SOURCE (da, dl or unknown) and NODE_HINT.
 # da_conf.yml exists on DA and DL nodes (and possibly non-DP boxes), so only the
-# aella_role VALUE counts: dl* -> dl, da*/dr* -> da, anything else -> unknown.
+# aella_role VALUE counts: dl or dl-<suffix> -> dl, da/dr (optionally -<suffix>)
+# -> da, anything else (e.g. data-collector, dlx, drive) -> unknown.
 detect_node() {
     NODE_ACTIVE="unknown"; NODE_SOURCE=""; NODE_HINT=""
     local conf="${ORION_DA_CONF:-/opt/aelladata/work/da_conf.yml}" line val
@@ -400,8 +401,8 @@ detect_node() {
                 val="${val#"${val%%[![:space:]]*}"}"
                 val="$(lower "$val")"
                 case "$val" in
-                    dl*)       NODE_ACTIVE="dl"; NODE_SOURCE="auto: aella_role";;
-                    da*|dr*)   NODE_ACTIVE="da"; NODE_SOURCE="auto: aella_role";;
+                    dl|dl-*)             NODE_ACTIVE="dl"; NODE_SOURCE="auto: aella_role";;
+                    da|da-*|dr|dr-*)     NODE_ACTIVE="da"; NODE_SOURCE="auto: aella_role";;
                 esac
                 break
             fi

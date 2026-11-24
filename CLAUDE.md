@@ -20,8 +20,8 @@ The single-file architecture is a **deliberate choice**, not tech debt. Do not r
 
 Orion hides tools that do not apply to the current node type, using the free-text `runs_on` header (no header-format change).
 Active node precedence: `--node <da|dl|sensor|all>` > `ORION_NODE` > auto-detect. Auto-detect reads only the value of
-`aella_role:` in `${ORION_DA_CONF:-/opt/aelladata/work/da_conf.yml}` (`dl*` -> dl, `da*`/`dr*` -> da, anything else ->
-`unknown`); hostname is a display-only hint; sensors have no auto signal (override only). The `t` key cycles
+`aella_role:` in `${ORION_DA_CONF:-/opt/aelladata/work/da_conf.yml}` (role is `dl` -> dl, or `da`/`dr` -> da, each optionally followed by `-<suffix>`;
+anything else, e.g. `data-collector`, -> `unknown`); hostname is a display-only hint; sensors have no auto signal (override only). The `t` key cycles
 auto -> da -> dl -> sensor -> all. Recognized `runs_on` tokens: `da`/`da-master`/`da-vm`/`da-worker`, the `dl-*` equivalents,
 `sensor`, `any`; everything else is ignored. A tool is hidden only if the active node is da/dl/sensor and the tool lists
 recognized nodes that exclude it (and not `any`); empty recognized set = always shown; if everything would be hidden the

@@ -69,8 +69,8 @@ is hidden. Categories with no visible tools are not listed.
 1. `--node <da|dl|sensor|all>` (a bad or missing value prints an error and usage, exit 1).
 2. `ORION_NODE=<da|dl|sensor|all>` (an invalid value is ignored with a warning and detection is used).
 3. Auto-detect, read-only (no sudo, kubectl, or network): the value of `aella_role:` in
-   `/opt/aelladata/work/da_conf.yml`. A value starting with `dl` means DL; starting with `da` or `dr` means DA
-   (a DA master has been seen as `DR-master`). Any other or empty value, or an unreadable/missing file, means `unknown`.
+   `/opt/aelladata/work/da_conf.yml`. A role of `dl` (optionally followed by `-<suffix>`, e.g. `DL-master`) means DL; a role of `da` or `dr`
+   (optionally followed by `-<suffix>`, e.g. `DR-master`, which a DA master has been seen as) means DA. Any other or empty value, or an unreadable/missing file, means `unknown`.
    That file also exists on DL nodes and may exist on non-DP boxes, so only the role value counts.
 
 `all` and `unknown` do no filtering. Press `t` to cycle auto, da, dl, sensor, all, and back to auto (which re-runs detection).
