@@ -10,7 +10,7 @@
 
 SCRIPTS_DIR="scripts"
 APP_NAME="Project Orion"
-VERSION="1.3.1"
+VERSION="1.4.0"
 
 # Hardcoded settings (no ENV needed)
 PAGE_SIZE=5                  # Tools per page
@@ -44,6 +44,19 @@ SEARCH_TERM=""
 CURRENT_PAGE=0
 TOTAL_PAGES=0
 VISIBLE_COUNT=0
+
+# Node filter state (see "Node filter" below)
+NODE_MODE="auto"          # auto | da | dl | sensor | all  (what the user chose)
+NODE_SET_SRC=""           # label for an explicit choice: "set with --node" | "set with ORION_NODE" | "set with t"
+NODE_ACTIVE="unknown"     # da | dl | sensor | all | unknown (what filtering uses)
+NODE_SOURCE=""            # why NODE_ACTIVE has its value (display only)
+NODE_HINT=""              # hostname hint (display only, never used to filter)
+NODE_CLUSTER=""           # cluster_name from da_conf.yml, sanitized (display only, never used to filter)
+NODE_NOTICE=""            # one-line notice shown under the node line (e.g. ignored ORION_NODE)
+NODE_FALLBACK=0           # 1 when the filter would hide every tool and was ignored
+SC_HIDE=()                # per-tool: 1 = hidden for the active node
+HIDDEN_COUNT=0            # tools hidden in the category shown on the tools screen
+NODE_RUNS_SET=""          # result of runs_on_nodes()
 
 # Ctrl-C exits cleanly (never deletes anything)
 trap 'echo; echo "${YELLOW}Exiting (Ctrl-C)...${RESET}"; clear; exit 130' INT
@@ -231,6 +244,7 @@ scan_one() {
 scan_scripts() {
     SC_FILE=(); SC_STATUS=(); SC_MSG=(); SC_LISTED=(); SC_TEMP=()
     SC_NAME=(); SC_CAT=(); SC_RUNS=(); SC_MODE=(); SC_ARGS=(); SC_DESC=(); SC_RUNTIME=()
+    SC_HIDE=()
     [[ -d "$SCRIPTS_DIR" ]] || return 1
     local tier dir f base
     for tier in 0 1; do
@@ -350,10 +364,150 @@ mode_display() {
     esac
 }
 
+# --- Node filter -------------------------------------------------------------
+# Hide tools whose runs_on names only other node types. Never hide on a weak
+# signal: unknown node, "all", unrecognized/empty runs_on, or "any" show the tool.
+# Everything here is read-only: no sudo, no kubectl, no network, no eval/exec of
+# user-supplied values (values are checked against a fixed case whitelist).
+
+# Recognized node tokens in a free-text runs_on value -> NODE_RUNS_SET (" da dl any ")
+runs_on_nodes() {
+    local s tok; local -a toks
+    s="$(lower "$1")"
+    s="${s//[,\/]/ }"
+    read -ra toks <<<"$s"
+    NODE_RUNS_SET=" "
+    for tok in "${toks[@]}"; do
+        case "$tok" in
+            da|da-master|da-vm|da-worker) NODE_RUNS_SET+="da ";;
+            dl|dl-master|dl-vm|dl-worker) NODE_RUNS_SET+="dl ";;
+            sensor)                       NODE_RUNS_SET+="sensor ";;
+            any)                          NODE_RUNS_SET+="any ";;
+        esac
+    done
+}
+
+# Best-effort detection: sets NODE_ACTIVE/NODE_SOURCE (da, dl or unknown) and NODE_HINT.
+# da_conf.yml exists on DA and DL nodes (and possibly non-DP boxes), so only the
+# aella_role VALUE counts: dl or dl-<suffix> -> dl, da/dr (optionally -<suffix>)
+# -> da, anything else (e.g. data-collector, dlx, drive) -> unknown.
+detect_node() {
+    NODE_ACTIVE="unknown"; NODE_SOURCE=""; NODE_HINT=""; NODE_CLUSTER=""
+    local conf="${ORION_DA_CONF:-/opt/aelladata/work/da_conf.yml}" line val role="" have_role=0 cluster="" have_cluster=0
+    if [[ -f "$conf" && -r "$conf" ]]; then
+        while IFS= read -r line || [[ -n "$line" ]]; do
+            if (( ! have_role )) && [[ "$line" =~ ^aella_role:[[:space:]]*(.*)$ ]]; then
+                val="${BASH_REMATCH[1]}"
+                val="${val//\"/}"; val="${val//\'/}"; val="${val//$'\r'/}"
+                val="${val#"${val%%[![:space:]]*}"}"
+                role="$(lower "$val")"; have_role=1
+            elif (( ! have_cluster )) && [[ "$line" =~ ^cluster_name:[[:space:]]*(.*)$ ]]; then
+                val="${BASH_REMATCH[1]}"
+                val="${val//\"/}"; val="${val//\'/}"; val="${val//$'\r'/}"
+                val="${val#"${val%%[![:space:]]*}"}"; val="${val%"${val##*[![:space:]]}"}"
+                cluster="$val"; have_cluster=1
+            fi
+            (( have_role && have_cluster )) && break
+        done < "$conf" 2>/dev/null
+    fi
+    role="${role%"${role##*[![:space:]]}"}"
+    case "$role" in
+        dl|dl-*)             NODE_ACTIVE="dl"; NODE_SOURCE="auto: aella_role";;
+        da|da-*|dr|dr-*)     NODE_ACTIVE="da"; NODE_SOURCE="auto: aella_role";;
+    esac
+    # Cluster name is display-only; only kept for a recognized role
+    [[ "$NODE_ACTIVE" != "unknown" && -n "$cluster" ]] && NODE_CLUSTER="$(safe_echo_val "$cluster")"
+    local h; h="$(lower "${HOSTNAME:-}")"
+    case "$h" in
+        da-*|da_*) NODE_HINT="da";;
+        dl-*|dl_*) NODE_HINT="dl";;
+    esac
+    return 0
+}
+
+# Apply NODE_MODE: sets NODE_ACTIVE/NODE_SOURCE/NODE_HINT
+resolve_node() {
+    if [[ "$NODE_MODE" == "auto" ]]; then
+        detect_node
+    else
+        NODE_ACTIVE="$NODE_MODE"; NODE_SOURCE="${NODE_SET_SRC:-set with t}"; NODE_HINT=""; NODE_CLUSTER=""
+    fi
+}
+
+# Fill SC_HIDE for the active node. If every listed tool would be hidden, hide none.
+compute_visibility() {
+    SC_HIDE=(); NODE_FALLBACK=0
+    local i shown=0 hidden=0
+    for i in "${!SC_FILE[@]}"; do
+        SC_HIDE[$i]=0
+        [[ "${SC_LISTED[$i]}" == "1" ]] || continue
+        case "$NODE_ACTIVE" in
+            da|dl|sensor)
+                runs_on_nodes "${SC_RUNS[$i]}"
+                if [[ "$NODE_RUNS_SET" != " " && "$NODE_RUNS_SET" != *" any "* && "$NODE_RUNS_SET" != *" $NODE_ACTIVE "* ]]; then
+                    SC_HIDE[$i]=1; hidden=$((hidden+1)); continue
+                fi
+                ;;
+        esac
+        shown=$((shown+1))
+    done
+    if (( shown == 0 && hidden > 0 )); then
+        for i in "${!SC_HIDE[@]}"; do SC_HIDE[$i]=0; done
+        NODE_FALLBACK=1
+    fi
+}
+
+# Next NODE_MODE in the t-key cycle: auto -> da -> dl -> sensor -> all -> auto
+cycle_node() {
+    case "$NODE_MODE" in
+        auto)   NODE_MODE="da";;
+        da)     NODE_MODE="dl";;
+        dl)     NODE_MODE="sensor";;
+        sensor) NODE_MODE="all";;
+        *)      NODE_MODE="auto";;
+    esac
+    NODE_SET_SRC="set with t"
+    resolve_node
+    compute_visibility
+}
+
+# Strip anything but a conservative character set before echoing user input
+safe_echo_val() { printf '%s' "${1//[^A-Za-z0-9._-]/?}" | cut -c1-24; }
+
+# Validate a --node / ORION_NODE value; prints the normalized value, returns 1 if invalid
+node_value() {
+    local v; v="$(lower "$1")"
+    case "$v" in
+        da|dl|sensor|all) printf '%s' "$v"; return 0;;
+    esac
+    return 1
+}
+
+node_line() {
+    case "$NODE_ACTIVE" in
+        unknown)
+            local h=""
+            [[ -n "$NODE_HINT" ]] && h="hostname suggests $NODE_HINT; "
+            printf 'Node: unknown - showing all tools (%spress t to choose)' "$h";;
+        all) printf 'Node: all (press t to change)';;
+        *)
+            if [[ "$NODE_MODE" == "auto" && -n "$NODE_CLUSTER" ]]; then
+                printf 'Node: %s (%s, cluster %s)' "$NODE_ACTIVE" "$NODE_SOURCE" "$NODE_CLUSTER"
+            else
+                printf 'Node: %s (%s)' "$NODE_ACTIVE" "$NODE_SOURCE"
+            fi;;
+    esac
+}
+
 # --- UI ---------------------------------------------------------------------
 draw_menu() {
     clear
     echo "${BOLD}${CYAN}=== ${APP_NAME} v${VERSION} ===${RESET}"
+    if [[ "$MODE" == "categories" || "$MODE" == "tools" ]]; then
+        echo "$(node_line)"
+        [[ -n "$NODE_NOTICE" ]] && echo "${YELLOW}${NODE_NOTICE}${RESET}"
+        (( NODE_FALLBACK )) && echo "${YELLOW}Filter would hide every tool - ignoring it and showing all.${RESET}"
+    fi
     echo
 
     if [[ "$MODE" == "tools" ]]; then
@@ -363,6 +517,7 @@ draw_menu() {
             echo "Category: $SELECTED_CATEGORY"
         fi
         echo "Results: $VISIBLE_COUNT  Page: $((CURRENT_PAGE+1))/$((TOTAL_PAGES==0?1:TOTAL_PAGES))"
+        (( HIDDEN_COUNT > 0 )) && echo "${YELLOW}${HIDDEN_COUNT} tool(s) hidden for this node - press t to change${RESET}"
     elif [[ "$MODE" == "tool_detail" ]]; then
         local i="$SELECTED_IDX"
         echo "Tool: ${SC_NAME[$i]}"
@@ -392,11 +547,11 @@ draw_menu() {
     echo
     case "$MODE" in
         "categories")
-            echo "${CYAN}↑/↓: Move  Enter: Select  q: Quit${RESET}"
+            echo "${CYAN}↑/↓: Move  Enter: Select  t: Cycle node (auto/da/dl/sensor/all)  q: Quit${RESET}"
             ;;
         "tools")
             # n/p first, then search
-            echo "${CYAN}↑/↓: Move  Enter: Select  b: Back  q: Quit  n/p: Next/Prev page  /: Search${RESET}"
+            echo "${CYAN}↑/↓: Move  Enter: Select  b: Back  q: Quit  n/p: Next/Prev page  /: Search  t: Cycle node${RESET}"
             ;;
         "tool_detail")
             echo "${CYAN}↑/↓: Move  Enter: Select  b: Back  q: Quit${RESET}"
@@ -413,6 +568,7 @@ load_categories() {
     local cats=()
     for i in "${!SC_FILE[@]}"; do
         [[ "${SC_LISTED[$i]}" == "1" ]] || continue
+        [[ "${SC_HIDE[$i]:-0}" == "1" ]] && continue
         if [[ "${SC_TEMP[$i]}" == "1" ]]; then
             have_temp=1
         else
@@ -443,12 +599,17 @@ load_tools() {
     local filter_category="$1"
     MENU_OPTIONS=()
     MENU_ACTIONS=()
+    HIDDEN_COUNT=0
 
     # Search in names and descriptions (case-insensitive); sort case-insensitively
     local sorted=() line idx name_lc desc_lc
     while IFS= read -r line; do
         [[ -z "$line" ]] && continue
         idx=$((10#${line##*"$US"}))
+        if [[ "${SC_HIDE[$idx]:-0}" == "1" ]]; then
+            HIDDEN_COUNT=$((HIDDEN_COUNT+1))
+            continue
+        fi
         name_lc=$(lower "${SC_NAME[$idx]}")
         desc_lc=$(lower "${SC_DESC[$idx]}")
         if [[ -z "$SEARCH_TERM" || "$name_lc" == *"$SEARCH_TERM"* || "$desc_lc" == *"$SEARCH_TERM"* ]]; then
@@ -640,6 +801,23 @@ menu_loop() {
                     CURSOR=0
                 fi
                 ;;
+            "t"|"T")
+                if [[ "$MODE" == "categories" ]]; then
+                    cycle_node
+                    load_categories
+                    CURSOR=0
+                elif [[ "$MODE" == "tools" ]]; then
+                    cycle_node
+                    CURRENT_PAGE=0
+                    load_tools "$SELECTED_CATEGORY"
+                    if (( VISIBLE_COUNT == 0 )) && [[ -z "$SEARCH_TERM" ]]; then
+                        # Nothing left to show in this category for the new node
+                        MODE="categories"
+                        load_categories
+                    fi
+                    CURSOR=0
+                fi
+                ;;
             "n"|"N")
                 if [[ "$MODE" == "tools" && $((CURRENT_PAGE+1)) -lt $TOTAL_PAGES ]]; then
                     ((CURRENT_PAGE++))
@@ -675,8 +853,17 @@ scripts/temp/ holds undocumented Temporary scripts.
 Options:
   -h, --help      Show this help message and exit
   -V, --version   Show the ${APP_NAME} version and exit
+      --node NODE Show only tools for this node type: da, dl, sensor, or all
+                  (all = no filtering). Overrides ORION_NODE and auto-detection.
       --check     Validate script headers (OK/WARN/ERROR/TEMP per file) and exit;
                   exit status is 0 only when every scanned file is OK
+
+Node filter:
+  Tools whose runs_on names only other node types are hidden. The node comes from
+  --node, then the ORION_NODE environment variable (da|dl|sensor|all), then
+  auto-detection (DA/DL via aella_role; otherwise unknown = show all tools). In the
+  menu, press t to cycle: auto -> da -> dl -> sensor -> all -> auto.
+  --check always lists all files.
 EOF
 }
 
@@ -716,7 +903,7 @@ check_catalog() {
 }
 
 main() {
-    local do_check=0
+    local do_check=0 cli_node="" nv
     while [[ $# -gt 0 ]]; do
         case "$1" in
             -h|--help)
@@ -729,6 +916,22 @@ main() {
                 ;;
             --check)
                 do_check=1
+                ;;
+            --node|--node=*)
+                if [[ "$1" == --node=* ]]; then
+                    nv="${1#--node=}"
+                elif [[ $# -ge 2 ]]; then
+                    nv="$2"; shift
+                else
+                    echo "${RED}--node requires a value (da, dl, sensor, all)${RESET}" >&2
+                    print_usage >&2
+                    return 1
+                fi
+                if ! cli_node="$(node_value "$nv")"; then
+                    echo "${RED}Invalid --node value: '$(safe_echo_val "$nv")' (use da, dl, sensor, all)${RESET}" >&2
+                    print_usage >&2
+                    return 1
+                fi
                 ;;
             --)
                 shift
@@ -767,6 +970,20 @@ main() {
         fi
         return 1
     fi
+
+    # Node filter: --node > ORION_NODE > auto-detect
+    if [[ -n "$cli_node" ]]; then
+        NODE_MODE="$cli_node"; NODE_SET_SRC="set with --node"
+    elif [[ -n "${ORION_NODE:-}" ]]; then
+        if nv="$(node_value "$ORION_NODE")"; then
+            NODE_MODE="$nv"; NODE_SET_SRC="set with ORION_NODE"
+        else
+            NODE_NOTICE="Ignoring invalid ORION_NODE='$(safe_echo_val "$ORION_NODE")' (use da, dl, sensor, all); using auto-detect"
+            echo "${YELLOW}${NODE_NOTICE}${RESET}" >&2
+        fi
+    fi
+    resolve_node
+    compute_visibility
 
     menu_loop
 }
