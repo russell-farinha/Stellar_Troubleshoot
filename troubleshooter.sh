@@ -547,11 +547,11 @@ draw_menu() {
     echo
     case "$MODE" in
         "categories")
-            echo "${CYAN}↑/↓: Move  Enter: Select  t: Node filter  q: Quit${RESET}"
+            echo "${CYAN}↑/↓: Move  Enter: Select  t: Cycle node (auto/da/dl/sensor/all)  q: Quit${RESET}"
             ;;
         "tools")
             # n/p first, then search
-            echo "${CYAN}↑/↓: Move  Enter: Select  b: Back  q: Quit  n/p: Next/Prev page  /: Search  t: Node filter${RESET}"
+            echo "${CYAN}↑/↓: Move  Enter: Select  b: Back  q: Quit  n/p: Next/Prev page  /: Search  t: Cycle node${RESET}"
             ;;
         "tool_detail")
             echo "${CYAN}↑/↓: Move  Enter: Select  b: Back  q: Quit${RESET}"
