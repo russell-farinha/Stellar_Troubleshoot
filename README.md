@@ -1,4 +1,4 @@
-# Project Orion 1.3.1
+# Project Orion 1.4.0
 
 Project Orion is a self-contained Bash launcher that presents an interactive, keyboard-driven menu for running diagnostic
 and helper utilities. The catalogue is built at startup by scanning the scripts under `scripts/` for a small self-describing
@@ -12,6 +12,7 @@ by the launcher.
 - **Self-describing catalogue:** categories, descriptions, run location, and risk mode come from each script's header.
 - **Smart runtime detection:** honours an optional `runtime` header field or infers Bash vs. Python from the file extension.
 - **Search & pagination:** filter by keyword inside a category and browse large lists with next/previous page shortcuts.
+- **Node-aware:** hides tools that only apply to a different node type (DA, DL, sensor), with a safe override (see "Node filter").
 - **Safe by design:** no UI action ever deletes files, and the arguments prompt never runs shell expansion.
 
 ## Repository contents
@@ -35,6 +36,7 @@ By default the script opens the full-screen menu immediately. Use the keyboard s
 | `b` | Back up to the previous view |
 | `n` / `p` | Flip between paginated result pages |
 | `/` | Search within the current category |
+| `t` | Cycle the node filter (categories and tool-list screens): auto, da, dl, sensor, all |
 | `q` | Quit |
 | `Ctrl+C` | Exit gracefully |
 
@@ -49,12 +51,46 @@ Project Orion exposes its metadata without launching the UI:
 
 ```bash
 ./troubleshooter.sh --help     # Usage information
-./troubleshooter.sh --version  # Prints "Project Orion 1.3.1"
+./troubleshooter.sh --version  # Prints "Project Orion 1.4.0"
 ./troubleshooter.sh --check    # Validate script headers and exit
+./troubleshooter.sh --node dl  # Start with the node filter set (da, dl, sensor, or all)
 ```
 
 `--check` prints one line per scanned file (`OK`, `WARN`, `ERROR`, or `TEMP` with a short reason), then the categories in
 use and a summary. It exits 0 only when every scanned file is OK; any WARN, ERROR, or TEMP gives exit status 1.
+
+## Node filter
+Orion runs on on-prem/pre-SaaS Stellar nodes. It shows only the tools that apply to the node it is running on, using each
+tool's free-text `runs_on` header (no header change). The active node is shown under the title (for example
+`Node: dl (auto: aella_role)`), and the tool list says `N tool(s) hidden for this node - press t to change` when something
+is hidden. Categories with no visible tools are not listed.
+
+**Choosing the node** (first match wins):
+1. `--node <da|dl|sensor|all>` (a bad or missing value prints an error and usage, exit 1).
+2. `ORION_NODE=<da|dl|sensor|all>` (an invalid value is ignored with a warning and detection is used).
+3. Auto-detect, read-only (no sudo, kubectl, or network): the value of `aella_role:` in
+   `/opt/aelladata/work/da_conf.yml`. A value starting with `dl` means DL; starting with `da` or `dr` means DA
+   (a DA master has been seen as `DR-master`). Any other or empty value, or an unreadable/missing file, means `unknown`.
+   That file also exists on DL nodes and may exist on non-DP boxes, so only the role value counts.
+
+`all` and `unknown` do no filtering. Press `t` to cycle auto, da, dl, sensor, all, and back to auto (which re-runs detection).
+There is no reliable automatic signal for sensors, so sensors are override-only (`--node sensor`, `ORION_NODE=sensor`, or `t`).
+The hostname is only a hint: if it starts with `da-`/`da_` or `dl-`/`dl_` and the node is `unknown`, the header says
+"hostname suggests dl" but nothing is filtered on it. For testing, `ORION_DA_CONF` overrides the da_conf.yml path.
+
+**Matching `runs_on`:** the value is lowercased and split on commas, slashes, and whitespace. Recognized tokens:
+
+| Token | Node |
+| --- | --- |
+| `da`, `da-master`, `da-vm`, `da-worker` | da |
+| `dl`, `dl-master`, `dl-vm`, `dl-worker` | dl |
+| `sensor` | sensor |
+| `any` | every node |
+
+Anything else (`in-pod`, `off-box`, `not specified`, free text) is ignored. A tool is hidden only when the active node is
+da, dl, or sensor and the tool lists at least one recognized node, does not list `any`, and does not list the active node.
+A tool with no recognized token is always shown. Temporary tools follow the same rules. If the filter would hide every tool
+it is ignored (with a notice). `--check`, search, and tool detail are unaffected by the filter.
 
 ## Script headers
 The launcher reads a comment block within the first 40 lines of each script (works for `.sh` and `.py`):
@@ -77,7 +113,7 @@ The launcher reads a comment block within the first 40 lines of each script (wor
 - `mode` is `read-only` or `changes-state`. `changes-state` means the tool can modify the platform under diagnosis
   (services, config, data). `read-only` means it does not; it may still write its own output or temp files (say so in the
   description).
-- `runs_on` is free text. Recommended vocabulary: `DL-master`, `DA-master`, `sensor`, `pod: <name>`, `off-box`, `any`.
+- `runs_on` is free text. Recommended vocabulary: `DL-master`, `DA-master`, `sensor`, `pod: <name>`, `off-box`, `any`. Node tokens in this value drive the node filter (see above).
 
 ### Categories
 Categories come from valid headers and are listed alphabetically (case-insensitively; spellings that differ only in case merge into one entry and `--check` warns), with Temporary always last. Tools are also sorted case-insensitively. A category names the component

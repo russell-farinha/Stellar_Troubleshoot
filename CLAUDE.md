@@ -16,6 +16,18 @@ The single-file architecture is a **deliberate choice**, not tech debt. Do not r
 | `scripts/_template.sh`, `scripts/_template.py` | Copy these to start a new tool (not listed in the menu) |
 | `releases/` | Tarball releases |
 
+## Node filter
+
+Orion hides tools that do not apply to the current node type, using the free-text `runs_on` header (no header-format change).
+Active node precedence: `--node <da|dl|sensor|all>` > `ORION_NODE` > auto-detect. Auto-detect reads only the value of
+`aella_role:` in `${ORION_DA_CONF:-/opt/aelladata/work/da_conf.yml}` (`dl*` -> dl, `da*`/`dr*` -> da, anything else ->
+`unknown`); hostname is a display-only hint; sensors have no auto signal (override only). The `t` key cycles
+auto -> da -> dl -> sensor -> all. Recognized `runs_on` tokens: `da`/`da-master`/`da-vm`/`da-worker`, the `dl-*` equivalents,
+`sensor`, `any`; everything else is ignored. A tool is hidden only if the active node is da/dl/sensor and the tool lists
+recognized nodes that exclude it (and not `any`); empty recognized set = always shown; if everything would be hidden the
+filter is ignored. **Rule: never hide tools on a weak signal** — unknown/`all` show everything, and detection must stay
+read-only (no sudo, kubectl, network) and never eval or execute values. `--check` ignores the filter.
+
 ## Hard constraints
 
 1. **No shell escape, ever.** Orion runs in customer environments behind a restricted CLI shim. No feature may let a user run arbitrary shell commands from the UI. Any tool that invokes `less` must run with `LESSSECURE=1`.
