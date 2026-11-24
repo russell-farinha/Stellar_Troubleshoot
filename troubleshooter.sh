@@ -51,6 +51,7 @@ NODE_SET_SRC=""           # label for an explicit choice: "set with --node" | "s
 NODE_ACTIVE="unknown"     # da | dl | sensor | all | unknown (what filtering uses)
 NODE_SOURCE=""            # why NODE_ACTIVE has its value (display only)
 NODE_HINT=""              # hostname hint (display only, never used to filter)
+NODE_CLUSTER=""           # cluster_name from da_conf.yml, sanitized (display only, never used to filter)
 NODE_NOTICE=""            # one-line notice shown under the node line (e.g. ignored ORION_NODE)
 NODE_FALLBACK=0           # 1 when the filter would hide every tool and was ignored
 SC_HIDE=()                # per-tool: 1 = hidden for the active node
@@ -391,23 +392,31 @@ runs_on_nodes() {
 # aella_role VALUE counts: dl or dl-<suffix> -> dl, da/dr (optionally -<suffix>)
 # -> da, anything else (e.g. data-collector, dlx, drive) -> unknown.
 detect_node() {
-    NODE_ACTIVE="unknown"; NODE_SOURCE=""; NODE_HINT=""
-    local conf="${ORION_DA_CONF:-/opt/aelladata/work/da_conf.yml}" line val
+    NODE_ACTIVE="unknown"; NODE_SOURCE=""; NODE_HINT=""; NODE_CLUSTER=""
+    local conf="${ORION_DA_CONF:-/opt/aelladata/work/da_conf.yml}" line val role="" have_role=0 cluster="" have_cluster=0
     if [[ -f "$conf" && -r "$conf" ]]; then
         while IFS= read -r line || [[ -n "$line" ]]; do
-            if [[ "$line" =~ ^aella_role:[[:space:]]*(.*)$ ]]; then
+            if (( ! have_role )) && [[ "$line" =~ ^aella_role:[[:space:]]*(.*)$ ]]; then
                 val="${BASH_REMATCH[1]}"
                 val="${val//\"/}"; val="${val//\'/}"; val="${val//$'\r'/}"
                 val="${val#"${val%%[![:space:]]*}"}"
-                val="$(lower "$val")"
-                case "$val" in
-                    dl|dl-*)             NODE_ACTIVE="dl"; NODE_SOURCE="auto: aella_role";;
-                    da|da-*|dr|dr-*)     NODE_ACTIVE="da"; NODE_SOURCE="auto: aella_role";;
-                esac
-                break
+                role="$(lower "$val")"; have_role=1
+            elif (( ! have_cluster )) && [[ "$line" =~ ^cluster_name:[[:space:]]*(.*)$ ]]; then
+                val="${BASH_REMATCH[1]}"
+                val="${val//\"/}"; val="${val//\'/}"; val="${val//$'\r'/}"
+                val="${val#"${val%%[![:space:]]*}"}"; val="${val%"${val##*[![:space:]]}"}"
+                cluster="$val"; have_cluster=1
             fi
+            (( have_role && have_cluster )) && break
         done < "$conf" 2>/dev/null
     fi
+    role="${role%"${role##*[![:space:]]}"}"
+    case "$role" in
+        dl|dl-*)             NODE_ACTIVE="dl"; NODE_SOURCE="auto: aella_role";;
+        da|da-*|dr|dr-*)     NODE_ACTIVE="da"; NODE_SOURCE="auto: aella_role";;
+    esac
+    # Cluster name is display-only; only kept for a recognized role
+    [[ "$NODE_ACTIVE" != "unknown" && -n "$cluster" ]] && NODE_CLUSTER="$(safe_echo_val "$cluster")"
     local h; h="$(lower "${HOSTNAME:-}")"
     case "$h" in
         da-*|da_*) NODE_HINT="da";;
@@ -421,7 +430,7 @@ resolve_node() {
     if [[ "$NODE_MODE" == "auto" ]]; then
         detect_node
     else
-        NODE_ACTIVE="$NODE_MODE"; NODE_SOURCE="${NODE_SET_SRC:-set with t}"; NODE_HINT=""
+        NODE_ACTIVE="$NODE_MODE"; NODE_SOURCE="${NODE_SET_SRC:-set with t}"; NODE_HINT=""; NODE_CLUSTER=""
     fi
 }
 
@@ -481,7 +490,12 @@ node_line() {
             [[ -n "$NODE_HINT" ]] && h="hostname suggests $NODE_HINT; "
             printf 'Node: unknown - showing all tools (%spress t to choose)' "$h";;
         all) printf 'Node: all (press t to change)';;
-        *)   printf 'Node: %s (%s)' "$NODE_ACTIVE" "$NODE_SOURCE";;
+        *)
+            if [[ "$NODE_MODE" == "auto" && -n "$NODE_CLUSTER" ]]; then
+                printf 'Node: %s (%s, cluster %s)' "$NODE_ACTIVE" "$NODE_SOURCE" "$NODE_CLUSTER"
+            else
+                printf 'Node: %s (%s)' "$NODE_ACTIVE" "$NODE_SOURCE"
+            fi;;
     esac
 }
 
